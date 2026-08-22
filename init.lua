@@ -1,0 +1,106 @@
+-- '@qbsql/init.lua' -- installs QB.sql.* into the CONSUMER's own Lua VM.
+--
+-- A consumer opts in with, in this order:
+--     shared_script '@qblib/init.lua'
+--     shared_script '@qbsql/init.lua'
+--
+-- WHY THIS IS LEGAL: qblib/init.lua creates the global `QB` as a plain table
+-- whose metatable has only __index (no __newindex). So `QB.sql = {...}` from a
+-- later shared_script in the same VM is a plain rawset -- qblib's auto-vivifying
+-- __index never fires for `sql` again. We install real LOCAL functions here, in
+-- the caller's VM, so their promise.new()/Citizen.Await are same-VM: none of the
+-- cross-resource promise-marshalling hazard that qblib's settleForExport exists
+-- to work around applies.
+--
+-- WHY NOT a qblib/modules/sql module: qblib is zero-dependency and every
+-- consumer loads it. Putting QB.sql there would invert the graph (library
+-- depends on an application resource), and qblib's finalise exports
+-- unconditionally -- so QB.sql.query would EXIST on servers not running qbsql
+-- and fail at runtime. This opt-in include is strictly safer.
+
+assert(QB, '@qbsql/init.lua must be loaded AFTER @qblib/init.lua (add its shared_script first).')
+
+QB.sql = QB.sql or {}
+
+local driver = exports.qbsql
+
+-- Run a JS export that returns a promise, and Await it on this coroutine.
+-- Returns (value, errorString). The JS `dataExport` wrapper returns a promise
+-- when no callback is passed; FiveM marshals its resolution back here.
+local function await(name, ...)
+    local args = { ... }
+    local p = promise.new()
+    -- We pass a Lua callback as the trailing argument; the JS side detects a
+    -- callable last arg and calls cb(result, errString) instead of returning a
+    -- promise. This avoids depending on cross-boundary promise marshalling.
+    args[#args + 1] = function(result, err)
+        if err then
+            p:reject(err)
+        else
+            p:resolve(result)
+        end
+    end
+    driver[name](driver, table.unpack(args))
+    local ok, res = pcall(Citizen.Await, p)
+    if not ok then
+        return nil, tostring(res)
+    end
+    return res
+end
+
+-- The yielding API. Each returns (value, errorString); on error the value is
+-- nil and the second return carries the message, per this codebase's
+-- fallible-function convention (never throws across the call).
+function QB.sql.ready(timeoutMs)
+    -- isReady is cheap and synchronous; poll it so a caller can gate on the pool.
+    if exports.qbsql:isReady() then return true end
+    local deadline = GetGameTimer() + (timeoutMs or (Config and Config.sql and Config.sql.readyTimeout) or 60000)
+    while not exports.qbsql:isReady() do
+        if GetGameTimer() > deadline then return false, 'qbsql not ready within timeout' end
+        Wait(50)
+    end
+    return true
+end
+
+function QB.sql.query(sql, params)    return await('query', sql, params) end
+function QB.sql.single(sql, params)   return await('single', sql, params) end
+function QB.sql.scalar(sql, params)   return await('scalar', sql, params) end
+function QB.sql.execute(sql, params)  return await('execute', sql, params) end
+function QB.sql.insert(sql, params)   return await('insert', sql, params) end
+function QB.sql.update(sql, params)   return await('update', sql, params) end
+function QB.sql.batch(statements)     return await('batch', statements) end
+function QB.sql.transaction(a, b)     return await('transaction', a, b) end
+function QB.sql.upsert(table_, key, rows, opts) return await('upsert', table_, key, rows, opts) end
+function QB.sql.migrate(resource, migrations)   return await('migrate', resource, migrations) end
+function QB.sql.stats()               return exports.qbsql:stats() end
+
+-- The FIRE-AND-FORGET path. These NEVER yield -- they hand rows to the JS queue
+-- and return immediately. This is the hot save path for qbcore's persistence.
+function QB.sql.enqueue(table_, key, row, opts)      exports.qbsql:enqueue(table_, key, row, opts) end
+function QB.sql.enqueueMany(table_, key, rows, opts) exports.qbsql:enqueueMany(table_, key, rows, opts) end
+
+-- flush yields until the named table (or everything) has been drained.
+function QB.sql.flush(table_)
+    local p = promise.new()
+    exports.qbsql:flush(table_, function(ok, err)
+        if ok then p:resolve(true) else p:reject(err or 'flush failed') end
+    end)
+    local ok, res = pcall(Citizen.Await, p)
+    if not ok then return false, tostring(res) end
+    return res
+end
+
+-- Non-yielding callback variants for callers that don't want to spin up a
+-- coroutine. cb(result, errorString).
+local function asyncVariant(name)
+    return function(sql, params, cb)
+        exports.qbsql[name](exports.qbsql, sql, params, cb)
+    end
+end
+
+QB.sql.queryAsync   = asyncVariant('query')
+QB.sql.singleAsync  = asyncVariant('single')
+QB.sql.scalarAsync  = asyncVariant('scalar')
+QB.sql.executeAsync = asyncVariant('execute')
+QB.sql.insertAsync  = asyncVariant('insert')
+QB.sql.updateAsync  = asyncVariant('update')

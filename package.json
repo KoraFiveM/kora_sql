@@ -1,0 +1,9 @@
+{
+  "name": "qbsql",
+  "version": "1.0.0",
+  "description": "High-throughput MySQL driver for FiveM with write coalescing and oxmysql/mysql-async compatibility",
+  "private": true,
+  "dependencies": {
+    "mysql2": "^3.11.0"
+  }
+}
