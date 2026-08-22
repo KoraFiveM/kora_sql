@@ -6,16 +6,22 @@
 
 'use strict';
 
-const cfgLoader = require('./config');
-const poolBuilder = require('./pool');
-const { StatementCache } = require('./statements');
-const { Stats } = require('./stats');
-const { Executor } = require('./execute');
-const { WriteQueue } = require('./queue');
-const { TransactionRunner } = require('./transaction');
-const { Migrator } = require('./migrate');
-const { register } = require('./exports');
-const log = require('./logger');
+// FXServer evaluates a server-side JS entry through a resource-root
+// `dummy.js`, not this file's on-disk dirname. Relative `./config` imports
+// therefore resolve to `<resource>/config.js` and fail even though every
+// companion lives under server/js/. Resolve these first-level imports from the
+// resource root; once loaded, each real CommonJS module resolves its own local
+// dependencies normally.
+const cfgLoader = require('./server/js/config');
+const poolBuilder = require('./server/js/pool');
+const { StatementCache } = require('./server/js/statements');
+const { Stats } = require('./server/js/stats');
+const { Executor } = require('./server/js/execute');
+const { WriteQueue } = require('./server/js/queue');
+const { TransactionRunner } = require('./server/js/transaction');
+const { Migrator } = require('./server/js/migrate');
+const { register } = require('./server/js/exports');
+const log = require('./server/js/logger');
 
 // In-memory prepared-handle store for oxmysql's store()/rawExecute(). Handles
 // are integers and explicitly do NOT survive a restart (documented refusal).
