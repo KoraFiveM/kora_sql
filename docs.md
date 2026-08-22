@@ -70,9 +70,13 @@ QB.sql.enqueue('players', 'citizenid', { pk = cid, cols = { money = json } })
 Never yields. `rows` = `{ {pk=, cols={}}, ... }`. **One boundary crossing for N
 rows** — this is the hot save path.
 
-`opts` = `{ mode = 'assign'|'accumulate', priority = 'normal'|'immediate', onError = 'retry'|'drop' }`.
+`opts` = `{ mode = 'assign'|'accumulate', writeMode = 'upsert'|'update', priority = 'normal'|'immediate' }`.
 - `assign` (default): `col = new value` (last write wins).
 - `accumulate`: `col = col + value` (counters). Bucket padding is disabled here.
+- `writeMode = 'upsert'` (default): insert missing rows, then update a conflict.
+- `writeMode = 'update'`: only update rows already known to exist. Use this for
+  partial writes to a table with required columns that are not in `cols`; it
+  avoids MariaDB validating those omitted columns as part of an INSERT.
 - `priority = 'immediate'`: flush this table now rather than on the interval.
 
 ### QB.sql.flush(table?) -> boolean, errString

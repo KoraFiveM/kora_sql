@@ -22,6 +22,18 @@
 
 const log = require('./logger');
 
+// A Lua resource can stop after it invokes an async export but before qbsql
+// settles it. FiveM then throws when the stale function reference is called.
+// Never let that transport-level race become an unhandled Node rejection.
+function reply(name, cb, ...args) {
+    if (!cb) return;
+    try {
+        cb(...args);
+    } catch (err) {
+        log.warn('exports', `${name} reply dropped because the caller stopped: ${err.message}`);
+    }
+}
+
 // Wrap an async impl so it can be called two ways from Lua:
 //   * exports.qbsql:queryAsync(sql, params, cb, resource) -> cb(result, errString)
 //   * exports.qbsql:query(sql, params, resource)          -> returns a JS promise
@@ -47,10 +59,10 @@ function register(api, exports) {
             }
             const p = Promise.resolve()
                 .then(() => impl(...args, resource))
-                .then((res) => { if (cb) cb(res, null); return res; })
+                .then((res) => { reply(name, cb, res, null); return res; })
                 .catch((err) => {
                     log.error('exports', `${name} failed: ${err.message}`);
-                    if (cb) { cb(null, String(err.message)); return null; }
+                    if (cb) { reply(name, cb, null, String(err.message)); return null; }
                     // No callback: rethrow so a Citizen.Await on the Lua side rejects.
                     throw err;
                 });
@@ -68,7 +80,7 @@ function register(api, exports) {
     exports('isReady', () => api.isReady());
     exports('version', () => api.version());
     exports('awaitReady', function (cb) {
-        api.ready().then(() => { if (cb) cb(true, null); }).catch((e) => { if (cb) cb(false, String(e.message)); });
+        api.ready().then(() => reply('awaitReady', cb, true, null)).catch((e) => reply('awaitReady', cb, false, String(e.message)));
     });
 
     // --- core data path ---
@@ -105,7 +117,9 @@ function register(api, exports) {
     });
     exports('flush', function (table, cb) {
         if (typeof table === 'function') { cb = table; table = undefined; }
-        api.queue.flush(table).then(() => { if (cb) cb(true, null); }).catch((e) => { if (cb) cb(false, String(e.message)); });
+        api.queue.flush(table)
+            .then(() => reply('flush', cb, true, null))
+            .catch((e) => reply('flush', cb, false, String(e.message)));
     });
 
     // --- migrations ---

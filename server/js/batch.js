@@ -133,6 +133,53 @@ function build(table, conflictKey, columns, rows, opts) {
     return { sql, params, rowCount: effectiveRows.length };
 }
 
+// Build a batched UPDATE for rows the caller knows already exist. This is not
+// interchangeable with an upsert: MariaDB validates every NOT NULL column on
+// an INSERT before it reaches ON DUPLICATE KEY UPDATE, so a partial player save
+// such as { citizenid, position } fails when `license` has no default even when
+// that citizenid is already present. A CASE expression keeps the one-statement
+// per column-signature batching property without ever attempting an insert.
+//
+// It supports composite conflict keys too. Padding is safe for assign mode
+// (repeating the same assignment converges); it remains forbidden for
+// accumulate mode for the same reason as the upsert builder.
+function buildUpdate(table, conflictKey, columns, rows, opts) {
+    const mode = (opts && opts.mode) || 'assign';
+    const pad = opts && opts.pad;
+    if (pad && mode === 'accumulate') {
+        throw new Error('qbsql/batch: bucket padding is not sound in accumulate mode -- pass pad:false.');
+    }
+
+    const keyCols = Array.isArray(conflictKey) ? conflictKey : [conflictKey];
+    const effectiveRows = pad ? padRows(rows, bucketFor(rows.length)) : rows;
+    const keyMatch = () => keyCols.map((key) => `${quoteIdent(key)} = ?`).join(' AND ');
+
+    const params = [];
+    const assignments = columns.map((column) => {
+        const branches = [];
+        for (const row of effectiveRows) {
+            const pkVals = Array.isArray(row.pk) ? row.pk : [row.pk];
+            branches.push(`WHEN ${keyMatch()} THEN ${mode === 'accumulate' ? `${quoteIdent(column)} + ?` : '?'}`);
+            for (const value of pkVals) params.push(value);
+            params.push(row.cols[column]);
+        }
+        return `${quoteIdent(column)} = CASE ${branches.join(' ')} ELSE ${quoteIdent(column)} END`;
+    });
+
+    const where = [];
+    for (const row of effectiveRows) {
+        const pkVals = Array.isArray(row.pk) ? row.pk : [row.pk];
+        where.push(`(${keyMatch()})`);
+        for (const value of pkVals) params.push(value);
+    }
+
+    return {
+        sql: `UPDATE ${quoteIdent(table)} SET ${assignments.join(', ')} WHERE ${where.join(' OR ')}`,
+        params,
+        rowCount: effectiveRows.length,
+    };
+}
+
 // Pick the dialect string from the version probe.
 function dialectFor(version) {
     if (version && !version.isMariaDB) {
@@ -143,4 +190,4 @@ function dialectFor(version) {
     return 'values';
 }
 
-module.exports = { build, dialectFor, bucketFor, BUCKETS, quoteIdent };
+module.exports = { build, buildUpdate, dialectFor, bucketFor, BUCKETS, quoteIdent };

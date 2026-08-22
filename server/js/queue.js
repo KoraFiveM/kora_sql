@@ -38,11 +38,13 @@ class WriteQueue {
         this.dialect = batch.dialectFor(pools.version);
     }
 
-    _tableState(table, conflictKey, mode) {
+    _tableState(table, conflictKey, mode, writeMode) {
         let st = this.pending.get(table);
         if (!st) {
-            st = { conflictKey, mode, rows: new Map(), generation: 0, flushing: false };
+            st = { conflictKey, mode, writeMode, rows: new Map(), generation: 0, flushing: false };
             this.pending.set(table, st);
+        } else if (st.mode !== mode || st.writeMode !== writeMode || JSON.stringify(st.conflictKey) !== JSON.stringify(conflictKey)) {
+            throw new Error(`qbsql/queue: incompatible queue options for table ${table} while writes are pending.`);
         }
         return st;
     }
@@ -52,7 +54,11 @@ class WriteQueue {
     enqueue(table, conflictKey, row, opts) {
         opts = opts || {};
         const mode = opts.mode || 'assign';
-        const st = this._tableState(table, conflictKey, mode);
+        const writeMode = opts.writeMode || 'upsert';
+        if (writeMode !== 'upsert' && writeMode !== 'update') {
+            throw new Error(`qbsql/queue: unsupported writeMode '${writeMode}'.`);
+        }
+        const st = this._tableState(table, conflictKey, mode, writeMode);
 
         const key = pkKey(row.pk);
         const existing = st.rows.get(key);
@@ -150,7 +156,8 @@ class WriteQueue {
                 );
                 for (let i = 0; i < g.rows.length; i += perStatement) {
                     const chunk = g.rows.slice(i, i + perStatement);
-                    const { sql, params, rowCount } = batch.build(
+                    const builder = st.writeMode === 'update' ? batch.buildUpdate : batch.build;
+                    const { sql, params, rowCount } = builder(
                         table, st.conflictKey, g.columns, chunk,
                         {
                             mode: st.mode,

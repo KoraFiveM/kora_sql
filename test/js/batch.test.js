@@ -8,7 +8,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { build, dialectFor, bucketFor } = require('../../server/js/batch.js');
+const { build, buildUpdate, dialectFor, bucketFor } = require('../../server/js/batch.js');
 
 const V8 = { isMariaDB: false, major: 8, minor: 0, patch: 34 };
 const V8_OLD = { isMariaDB: false, major: 8, minor: 0, patch: 18 };
@@ -110,4 +110,27 @@ test('composite conflict key emits all key columns first', () => {
         'INSERT INTO `inventories` (`identifier`,`kind`,`items`) VALUES (?,?,?) ON DUPLICATE KEY UPDATE `items` = VALUES(`items`)'
     );
     assert.deepEqual(params, ['veh1', 'trunk', 'x']);
+});
+
+test('update-only writes partial rows without attempting an insert', () => {
+    const rows = [
+        { pk: 'ABC', cols: { position: 'p1' } },
+        { pk: 'DEF', cols: { position: 'p2' } },
+    ];
+    const { sql, params } = buildUpdate('players', 'citizenid', ['position'], rows, { mode: 'assign', pad: false });
+    assert.equal(
+        sql,
+        'UPDATE `players` SET `position` = CASE WHEN `citizenid` = ? THEN ? WHEN `citizenid` = ? THEN ? ELSE `position` END WHERE (`citizenid` = ?) OR (`citizenid` = ?)'
+    );
+    assert.deepEqual(params, ['ABC', 'p1', 'DEF', 'p2', 'ABC', 'DEF']);
+});
+
+test('update-only supports a composite conflict key', () => {
+    const rows = [{ pk: ['veh1', 'trunk'], cols: { items: 'x' } }];
+    const { sql, params } = buildUpdate('inventories', ['identifier', 'kind'], ['items'], rows, { mode: 'assign', pad: false });
+    assert.equal(
+        sql,
+        'UPDATE `inventories` SET `items` = CASE WHEN `identifier` = ? AND `kind` = ? THEN ? ELSE `items` END WHERE (`identifier` = ? AND `kind` = ?)'
+    );
+    assert.deepEqual(params, ['veh1', 'trunk', 'x', 'veh1', 'trunk']);
 });
