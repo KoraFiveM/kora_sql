@@ -23,6 +23,19 @@ function pkKey(pk) {
     return Array.isArray(pk) ? pk.map((v) => '\x1f' + v).join('') : String(pk);
 }
 
+// Shallow value-equality over a `cols` map (flat column -> primitive/JSON
+// string). Used to tell whether a re-merged stale hedge copy in `pending` is
+// still exactly what we put there, or whether a newer enqueue() has since
+// merged into it in place.
+function colsEqual(a, b) {
+    const ak = Object.keys(a);
+    if (ak.length !== Object.keys(b).length) return false;
+    for (const k of ak) {
+        if (a[k] !== b[k]) return false;
+    }
+    return true;
+}
+
 class WriteQueue {
     constructor(executor, pools, stats, cfg) {
         this.executor = executor;
@@ -99,6 +112,11 @@ class WriteQueue {
             this.flush().catch((e) => log.error('queue', `high-water flush failed: ${e.message}`));
             return;
         }
+        this._ensureTimer();
+    }
+
+    // Arm the shared interval timer if it is not already running. Idempotent.
+    _ensureTimer() {
         if (!this.timer) {
             this.timer = setTimeout(() => {
                 this.timer = null;
@@ -120,7 +138,16 @@ class WriteQueue {
     async _flushTable(table) {
         const st = this.pending.get(table);
         if (!st || st.rows.size === 0) return;
-        if (st.flushing) return;               // one in flight per table
+        if (st.flushing) {
+            // A flush for this table is already in flight. If we got here via
+            // the immediate-priority path in _scheduleOrTrip, nothing armed
+            // the shared interval timer -- an immediate-priority row landing
+            // in `pending` while a same-table flush is running would
+            // otherwise be stranded with nothing scheduled to pick it up.
+            // Arm the timer as a fallback so it is swept up on the next tick.
+            this._ensureTimer();
+            return;               // one in flight per table
+        }
         st.flushing = true;
 
         // Snapshot + swap: rows arriving during this flush go into a fresh Map
@@ -179,18 +206,56 @@ class WriteQueue {
         }
     }
 
-    async _writeWithRetry(table, sql, params, chunk, mode, columns, attempt) {
+    _clearReMerged(table, reMerged, mode) {
+        if (!reMerged || !reMerged.size) return;
+        const st = this.pending.get(table);
+        if (!st) return;
+
+        for (const [key, staleCols] of reMerged) {
+            const current = st.rows.get(key);
+            if (!current) continue;
+            if (colsEqual(current.cols, staleCols)) {
+                st.rows.delete(key);
+                this.pendingRowCount--;
+            } else if (mode === 'accumulate') {
+                for (const c of Object.keys(staleCols)) {
+                    if (c in current.cols) {
+                        current.cols[c] -= staleCols[c];
+                        if (current.cols[c] === 0) delete current.cols[c];
+                    }
+                }
+                if (Object.keys(current.cols).length === 0) {
+                    st.rows.delete(key);
+                    this.pendingRowCount--;
+                }
+            }
+        }
+    }
+
+    async _writeWithRetry(table, sql, params, chunk, mode, columns, attempt, reMerged) {
         attempt = attempt || 0;
         try {
             await this.pools.write.execute(sql, params);
+            // A prior failed attempt (below) may have re-merged some of these
+            // rows' stale, pre-retry values back into the live pending set as
+            // a hedge. The direct retry we just ran used the ORIGINAL stale
+            // `params`, and it succeeded -- so that hedge copy must now be
+            // cleared, or it survives to the next flush and re-sends the same
+            // stale values a second time (silent double-counting in
+            // accumulate mode). Only clear it if it still holds exactly what
+            // we re-merged: if a newer enqueue() landed on top of it in the
+            // meantime (merged in place -- see enqueue()), that is a
+            // legitimate write that was never sent and must be preserved.
+            this._clearReMerged(table, reMerged, mode);
         } catch (err) {
             this.stats.queue.retries++;
             if (attempt >= 5) {
-                this.stats.queue.deadLettered += chunk.length;
                 log.error('queue',
                     `DEAD-LETTER after ${attempt} retries on ${table} (${chunk.length} rows): ${err.message}`);
-                await this._deadLetter(table, chunk, err).catch(() => {});
-                return;
+                await this._deadLetter(table, chunk, err);
+                this.stats.queue.deadLettered += chunk.length;
+                this._clearReMerged(table, reMerged, mode);
+                throw new Error(`qbsql: write to ${table} failed after ${attempt} retries; ${chunk.length} row(s) were dead-lettered`);
             }
             // Re-merge the failed rows into the live pending set so a newer
             // in-memory value can still supersede this stale retry -- a naive
@@ -202,8 +267,14 @@ class WriteQueue {
                 if (!st.rows.has(key)) {
                     // Only requeue columns not since superseded: if the row is
                     // already back in pending, its newer values win and we skip.
-                    st.rows.set(key, { pk: entry.pk, cols: { ...entry.cols } });
+                    // Keep an independent snapshot of the stale cols (not the
+                    // same object we store live) so a later success can tell
+                    // whether the live copy is still untouched.
+                    const staleCols = { ...entry.cols };
+                    st.rows.set(key, { pk: entry.pk, cols: { ...staleCols } });
                     this.pendingRowCount++;
+                    if (!reMerged) reMerged = new Map();
+                    reMerged.set(key, staleCols);
                 }
             }
             const backoff = Math.min(2000, 50 * Math.pow(2, attempt));
@@ -211,7 +282,7 @@ class WriteQueue {
             await new Promise((r) => setTimeout(r, backoff));
             // Rebuild from the (possibly merged) live set on the next flush;
             // here we retry the same chunk once more directly for promptness.
-            await this._writeWithRetry(table, sql, params, chunk, mode, columns, attempt + 1);
+            await this._writeWithRetry(table, sql, params, chunk, mode, columns, attempt + 1, reMerged);
         }
     }
 
@@ -220,13 +291,18 @@ class WriteQueue {
         const sql =
             'INSERT INTO `qbsql_deadletter` (`table_name`,`pk`,`cols_json`,`error`,`failed_at`) ' +
             'VALUES (?,?,?,?,NOW())';
+        const failures = [];
         for (const entry of chunk) {
             const pk = Array.isArray(entry.pk) ? entry.pk.join('\x1f') : String(entry.pk);
             try {
                 await this.pools.write.execute(sql, [table, pk, JSON.stringify(entry.cols), String(err.message).slice(0, 500)]);
             } catch (e) {
                 log.error('queue', `dead-letter insert itself failed for ${table}/${pk}: ${e.message}`);
+                failures.push(`${pk}: ${e.message}`);
             }
+        }
+        if (failures.length) {
+            throw new Error(`qbsql: failed to dead-letter ${failures.length}/${chunk.length} row(s): ${failures.join('; ')}`);
         }
     }
 

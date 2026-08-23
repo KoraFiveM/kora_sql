@@ -110,3 +110,17 @@ test('a transient write failure requeues and eventually succeeds', async () => {
     assert.equal(executed.length, 1);
     assert.deepEqual(executed[0].params, ['ABC', 'm']);
 });
+
+test('a terminal write failure is dead-lettered and rejects the flush', async () => {
+    const { executed, pools } = makeFakePools({ failFirst: 6 });
+    const stats = new Stats(150, 50);
+    const q = new WriteQueue(null, pools, stats, CFG);
+
+    q.enqueue('players', 'citizenid', { pk: 'ABC', cols: { money: 'm' } }, {});
+    await assert.rejects(() => q.flush(), /failed after 5 retries/);
+
+    assert.equal(executed.length, 1, 'only the dead-letter insert should succeed');
+    assert.match(executed[0].sql, /qbsql_deadletter/);
+    assert.equal(stats.summary({}).queue.deadLettered, 1);
+    assert.equal(q.depth().players.rows, 0, 'the stale retry hedge must not remain queued after dead-lettering');
+});

@@ -1,7 +1,9 @@
 // Migration runner. qbsql owns the RUNNER; each resource owns its migration
 // FILES (putting qbcore's DDL inside qbsql would be a layering inversion). A
 // resource calls exports.qbsql:migrate('qbcore', migrations, cb) with a list of
-// { version, name, sql, checksum }.
+// { version, name, sql, checksum, acceptedChecksums? }. The optional legacy
+// list is only for an intentional, reviewed retry-safety rewrite of an
+// already-shipped migration; arbitrary drift remains a hard failure.
 //
 // A checksum mismatch on an already-applied version is a HARD ABORT, not a
 // warning: silently tolerating an edited migration is exactly how a schema
@@ -10,6 +12,23 @@
 'use strict';
 
 const log = require('./logger');
+
+// Migration DDL is PARAMETERLESS by definition, so placeholder compilation must
+// never run on it. The pool sets namedPlaceholders:true (for mysql-async's
+// `@name` compat), which makes mysql2 hand any valueless query to the
+// `named-placeholders` parser. That parser tracks quotes but has NO concept of
+// SQL comments or backticks, so its /:([a-zA-Z][a-zA-Z0-9_]*)/ regex happily
+// matches inside them -- a migration whose header comment mentions an event
+// name like `qb-multicharacter:server:getSkin` gets read as two placeholders
+// (`:server`, `:getSkin`) and dies with "Named query contains placeholders, but
+// parameters object is undefined". mysql2 honours an explicit per-query false
+// (see _resolveNamedPlaceholders in its base/connection.js), so opt out here
+// rather than policing what our own DDL and its comments are allowed to say.
+// Statements that DO bind values keep passing an array, which mysql2 already
+// short-circuits past the named path.
+function ddl(sql) {
+    return { sql, namedPlaceholders: false };
+}
 
 const BOOTSTRAP = `
 CREATE TABLE IF NOT EXISTS \`qbsql_migrations\` (
@@ -42,8 +61,8 @@ class Migrator {
 
     async _bootstrap() {
         if (this._bootstrapped) return;
-        await this.pools.write.query(BOOTSTRAP);
-        await this.pools.write.query(DEADLETTER);
+        await this.pools.write.query(ddl(BOOTSTRAP));
+        await this.pools.write.query(ddl(DEADLETTER));
         this._bootstrapped = true;
     }
 
@@ -63,7 +82,9 @@ class Migrator {
         for (const m of sorted) {
             const prior = appliedByVersion.get(m.version);
             if (prior !== undefined) {
-                if (prior !== m.checksum) {
+                const acceptedLegacy = Array.isArray(m.acceptedChecksums)
+                    && m.acceptedChecksums.some((checksum) => typeof checksum === 'string' && checksum === prior);
+                if (prior !== m.checksum && !acceptedLegacy) {
                     throw new Error(
                         `qbsql: migration checksum mismatch for '${resource}' v${m.version} (${m.name}). ` +
                         `The file changed after it was applied. Refusing to continue -- ` +
@@ -73,27 +94,36 @@ class Migrator {
                 continue;   // already applied, checksum matches
             }
 
-            // Apply inside a transaction on a pinned connection.
+            // MariaDB DDL implicitly commits, so wrapping it in a transaction
+            // creates a false rollback guarantee. Multi-statement migrations
+            // are accepted only when every statement is an idempotent CREATE
+            // TABLE IF NOT EXISTS; a single DDL statement is atomic at the
+            // statement boundary and can be retried safely after failure.
             const conn = await this.pools.write.getConnection();
             const started = process.hrtime.bigint();
             try {
-                await conn.beginTransaction();
-                // A migration file may contain multiple statements separated by
-                // ';'. Split conservatively -- migrations are our own trusted
-                // DDL, not user input.
-                for (const stmt of splitStatements(m.sql)) {
-                    if (stmt.trim()) await conn.query(stmt);
+                const statements = splitStatements(m.sql).filter((stmt) => stmt.trim());
+                for (const stmt of statements) {
+                    const withoutComments = stmt.replace(/^\s*(?:--[^\n]*\n\s*)*/g, '');
+                    const safeCreate = /^CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\b/i.test(withoutComments);
+                    const allAdds = withoutComments.match(/\bADD\b/gi) || [];
+                    const safeAdds = withoutComments.match(/\bADD\s+(?:COLUMN|INDEX)\s+IF\s+NOT\s+EXISTS\b/gi) || [];
+                    const safeAlter = /^ALTER\s+TABLE\b/i.test(withoutComments)
+                        && allAdds.length > 0 && allAdds.length === safeAdds.length;
+                    if (!safeCreate && !safeAlter) {
+                        throw new Error('DDL migrations must be retry-safe (CREATE TABLE IF NOT EXISTS or ALTER ADD ... IF NOT EXISTS)');
+                    }
                 }
+
+                for (const stmt of statements) await conn.query(ddl(stmt));
                 const ms = Number(process.hrtime.bigint() - started) / 1e6;
                 await conn.query(
                     'INSERT INTO `qbsql_migrations` (`resource`,`version`,`name`,`checksum`,`duration_ms`) VALUES (?,?,?,?,?)',
                     [resource, m.version, m.name, m.checksum, Math.round(ms)]
                 );
-                await conn.commit();
                 ran++;
                 log.info('migrate', `${resource} v${m.version} '${m.name}' applied (${ms.toFixed(0)}ms)`);
             } catch (err) {
-                try { await conn.rollback(); } catch (_) {}
                 throw new Error(`qbsql: migration '${resource}' v${m.version} (${m.name}) failed: ${err.message}`);
             } finally {
                 conn.release();

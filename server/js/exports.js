@@ -66,7 +66,18 @@ function register(api, exports) {
                     // No callback: rethrow so a Citizen.Await on the Lua side rejects.
                     throw err;
                 });
-            if (!cb) return p;
+            if (!cb) {
+                // Fire-and-forget is a legitimate calling pattern here: some
+                // Lua callers never attach/await the returned promise. If `p`
+                // rejects and nothing ever consumes it, Node reports an
+                // unhandled rejection. Attach a no-op catch to `p` itself (not
+                // to a derived promise) purely so it counts as "handled";
+                // this does not change what `p` resolves/rejects with, so a
+                // caller that DOES await/consume it still sees the real
+                // result or error.
+                p.catch(() => {});
+                return p;
+            }
         });
     }
 

@@ -29,6 +29,17 @@ function poolOptions(cfg, connectionLimit) {
         enableKeepAlive: true,
         keepAliveInitialDelay: 10000,
 
+        // mysql2 has no separate "acquire" timeout for a getConnection() call
+        // that is queued waiting for a busy connection to free up (queueLimit
+        // above is unbounded, and that wait is genuinely open-ended -- not
+        // something this option fixes). What connectTimeout DOES bound is how
+        // long establishing a NEW physical connection may hang (DB
+        // unreachable, network stall, firewall black-hole): without it a
+        // stuck TCP handshake can hang far longer than is useful. Made
+        // explicit here rather than relying on mysql2's implicit default so
+        // the behaviour is documented and easy to find.
+        connectTimeout: 10000,
+
         // mysql2 returns DECIMAL as a STRING by default. Left off, every money
         // column arrives in Lua as "1250.00" and arithmetic silently breaks.
         decimalNumbers: true,
