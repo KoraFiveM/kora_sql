@@ -10,6 +10,38 @@
 const { isUnpreparableError } = require('./statements');
 const log = require('./logger');
 
+// Keep in sync with QB.sql.NULL in ../../init.lua.
+const NULL_SENTINEL = '\u0000qbsql:null\u0000';
+
+// Lua cannot store nil in a table, so an optional bind value leaves a gap.
+// Depending on whether `#t` sees past it, msgpack delivers that gap either as
+// a JS array containing `undefined` -- which mysql2 rejects outright with
+// "Bind parameters must not contain undefined" -- or as a MAP keyed by the
+// surviving 1-based indices. Normalise both shapes into a dense array here,
+// at the single point every executor funnels through, so no caller can
+// reintroduce the bug by forgetting a sentinel.
+function normalizeParams(params) {
+    if (params === null || params === undefined) return [];
+
+    let arr = params;
+    if (!Array.isArray(params)) {
+        if (typeof params !== 'object') return [params];
+        // A numeric-keyed map from a holed Lua array: rebuild it densely up to
+        // the highest index so placeholders keep their positions.
+        const keys = Object.keys(params);
+        if (keys.length === 0) return [];
+        if (!keys.every((k) => /^[0-9]+$/.test(k))) return params; // named placeholders
+        const max = Math.max(...keys.map(Number));
+        arr = new Array(max).fill(null);
+        for (const k of keys) arr[Number(k) - 1] = params[k];
+    }
+
+    // Array.from, not arr.map: map() SKIPS holes in a sparse array, so a hole
+    // would survive normalisation and reach mysql2 as undefined -- the exact
+    // failure this function exists to prevent.
+    return Array.from(arr, (v) => (v === undefined || v === NULL_SENTINEL ? null : v));
+}
+
 class Executor {
     constructor(pools, statements, stats) {
         this.pools = pools;
@@ -31,6 +63,7 @@ class Executor {
 
     // The one true executor. Returns the raw mysql2 [rows|result, fields].
     async runOne(sql, params, resource) {
+        params = normalizeParams(params);
         const pool = this._poolFor(sql);
         const started = process.hrtime.bigint();
         let errored = false;
@@ -117,4 +150,4 @@ class Executor {
     }
 }
 
-module.exports = { Executor };
+module.exports = { Executor, normalizeParams, NULL_SENTINEL };

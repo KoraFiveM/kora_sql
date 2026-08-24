@@ -10,23 +10,30 @@
 
 'use strict';
 
+const { normalizeParams } = require('./execute');
+
 class TransactionRunner {
     constructor(pools) {
         this.pools = pools;
     }
 
     // Normalise oxmysql's two argument shapes into an array of {sql, params}.
+    //
+    // These run through conn.execute() on a pinned connection rather than the
+    // Executor, so normalizeParams has to be applied here too -- otherwise a
+    // holed Lua param array reaches mysql2 as undefined inside a transaction,
+    // where the failure also rolls back every sibling statement.
     _normalise(queries, maybeParams) {
         if (typeof queries === 'string') {
             // transaction(sql, [ [p1], [p2], ... ]) -- one statement, many param sets.
             const sql = queries;
             const paramSets = Array.isArray(maybeParams) ? maybeParams : [maybeParams || []];
-            return paramSets.map((params) => ({ sql, params: params || [] }));
+            return paramSets.map((params) => ({ sql, params: normalizeParams(params) }));
         }
         // transaction([ {query|sql, values|params}, ... ])
         return queries.map((q) => ({
             sql: q.query || q.sql,
-            params: q.values || q.params || [],
+            params: normalizeParams(q.values || q.params),
         }));
     }
 

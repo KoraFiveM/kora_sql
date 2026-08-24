@@ -22,6 +22,15 @@ assert(QB, '@qbsql/init.lua must be loaded AFTER @qblib/init.lua (add its shared
 
 QB.sql = QB.sql or {}
 
+-- Explicit SQL NULL. A Lua table cannot store nil, so an optional bind value
+-- written as `{a, nil, b}` reaches the JS driver either as a hole (mysql2:
+-- "Bind parameters must not contain undefined") or as an array truncated at the
+-- gap -- which is how qbcore's garage insert failed on every boot for a
+-- job-fleet vehicle with no citizenid. Pass QB.sql.NULL for an intentionally
+-- null bind value; the JS side maps it back to null. Keep this literal in sync
+-- with NULL_SENTINEL in server/js/execute.js.
+QB.sql.NULL = '\0qbsql:null\0'
+
 local driver = exports.qbsql
 
 -- Run a JS export that returns a promise, and Await it on this coroutine.
