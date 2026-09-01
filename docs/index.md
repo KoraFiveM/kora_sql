@@ -24,10 +24,9 @@ else in the [qbcore2](https://github.com/qbcore2) set depends on it. It needs:
 - A running MySQL/MariaDB server.
 - `set mysql_connection_string "..."` in `server.cfg` — deliberately the same
   convar name oxmysql uses, so an existing server migrates untouched.
-- FiveM's standard `yarn` builder resource. qbsql declares it as a manifest
-  dependency, so mysql2 is installed automatically into qbsql's own
-  `node_modules/` directory before its server scripts start. Keeping the
-  dependency local is required by FXServer's filesystem sandbox.
+- The packaged `dist/build.js`, which includes mysql2 in the same way oxmysql's
+  release artifact does. Runtime `node_modules` and FiveM builder resources are
+  not required.
 
 ## Installation
 
@@ -41,8 +40,8 @@ ensure qblib
 ensure qbcore
 ```
 
-The standard `yarn` builder must be present in the server's resources. qbsql's
-manifest dependency starts it automatically; no manual `npm install` is needed.
+Source contributors run `yarn install` and `yarn build`; server operators use
+the committed bundle and do not need Yarn or a package install.
 
 Optional convars (defaults shown):
 ```

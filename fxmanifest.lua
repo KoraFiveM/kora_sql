@@ -16,11 +16,6 @@ provide 'oxmysql'
 provide 'mysql-async'
 provide 'ghmattimysql'
 
--- Ask FiveM's standard yarn builder to install package.json dependencies into
--- this resource before any server script runs. Keeping mysql2 under qbsql's
--- own node_modules directory is required by FXServer's filesystem sandbox.
-dependency 'yarn'
-
 files {
     'init.lua',       -- '@qbsql/init.lua' -- installs QB.sql.* into a consumer VM
     'lib/MySQL.lua'   -- '@qbsql/lib/MySQL.lua' -- the mysql-async/oxmysql `MySQL` global
@@ -38,12 +33,12 @@ shared_scripts {
 -- of thing that works on one build and breaks on the next. Listed explicitly
 -- (never globbed) so the intended sequence is documented, not implied by
 -- alphabetical glob expansion.
---   1. server/js/index.js   the driver + export surface
+--   1. dist/build.js        bundled driver + mysql2 + export surface
 --   2. server/ready.lua     qbsql:ready fan-out + isReady polling helper
 --   3. server/commands.lua  /qbsql console commands (consult ready.lua)
 --   4. server/compat/*      pure translation layers, no internal dependents
 server_scripts {
-    'server/js/index.js',
+    'dist/build.js',
     'server/ready.lua',
     'server/commands.lua',
     'server/compat/oxmysql.lua',
@@ -51,5 +46,5 @@ server_scripts {
     'server/compat/ghmattimysql.lua'
 }
 
--- mysql2 is installed into node_modules/ (gitignored) by the yarn dependency
--- above before qbsql starts. No manual package install or bundling is needed.
+-- Like oxmysql's release artifact, the committed bundle contains mysql2.
+-- FXServer needs neither a yarn builder nor runtime node_modules.

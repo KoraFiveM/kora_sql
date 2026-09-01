@@ -42,9 +42,10 @@ name so an existing server.cfg migrates untouched.
 FiveM's citizen `exports(name, fn)` registrar is the bare `exports` global **only
 in the resource entry file**. In a `require()`'d CommonJS sub-module, bare
 `exports` is `module.exports` and is not callable — which is why oxmysql bundles
-to a single file. We do NOT bundle: `server/js/index.js` captures the citizen
-registrar in the entry scope and passes it into `server/js/exports.js` as a
-parameter. Never call bare `exports(...)` from a sub-module.
+to a single file. qbsql follows that release model: esbuild emits
+`dist/build.js`, and `server/js/index.js` captures `globalThis.exports` before
+passing the registrar into `server/js/exports.js`. Never call bare
+`exports(...)` from a sub-module.
 
 ## Compat and attribution
 `server/compat/*.lua` register the foreign export surfaces via the
@@ -74,11 +75,11 @@ qbsql owns the runner (`server/js/migrate.js`); each resource owns its files. A
 checksum mismatch on an already-applied version is a **hard boot abort** — never
 a warning. `qbsql_migrations` and `qbsql_deadletter` are bootstrapped at boot.
 
-## Dependency install
-The manifest declares FiveM's standard `yarn` builder as a dependency. It
-installs mysql2 into this resource's `node_modules/` directory before qbsql
-starts, which keeps package reads inside FXServer's filesystem sandbox. Keep
-`yarn.lock` committed and `node_modules/` ignored. There is no bundler.
+## Build and distribution
+Like oxmysql, qbsql ships one server bundle containing mysql2. Run `yarn build`
+after changing JS or dependencies and commit `dist/build.js`; FXServer does not
+need a yarn builder or runtime `node_modules`. Keep `yarn.lock` committed and
+`node_modules/` ignored. Source tests still run against the unbundled modules.
 
 ## Testing
 `test/run.sh` runs the Lua smoke tests (plain lua5.4) then the JS suite

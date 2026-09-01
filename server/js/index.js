@@ -6,22 +6,19 @@
 
 'use strict';
 
-// FXServer evaluates a server-side JS entry through a resource-root
-// `dummy.js`, not this file's on-disk dirname. Relative `./config` imports
-// therefore resolve to `<resource>/config.js` and fail even though every
-// companion lives under server/js/. Resolve these first-level imports from the
-// resource root; once loaded, each real CommonJS module resolves its own local
-// dependencies normally.
-const cfgLoader = require('./server/js/config');
-const poolBuilder = require('./server/js/pool');
-const { StatementCache } = require('./server/js/statements');
-const { Stats } = require('./server/js/stats');
-const { Executor } = require('./server/js/execute');
-const { WriteQueue } = require('./server/js/queue');
-const { TransactionRunner } = require('./server/js/transaction');
-const { Migrator } = require('./server/js/migrate');
-const { register } = require('./server/js/exports');
-const log = require('./server/js/logger');
+// The source modules use ordinary file-relative imports. The release build is
+// a single resource-root dist/build.js, so FXServer never has to resolve these
+// requires through its synthetic dummy.js entry module.
+const cfgLoader = require('./config');
+const poolBuilder = require('./pool');
+const { StatementCache } = require('./statements');
+const { Stats } = require('./stats');
+const { Executor } = require('./execute');
+const { WriteQueue } = require('./queue');
+const { TransactionRunner } = require('./transaction');
+const { Migrator } = require('./migrate');
+const { register } = require('./exports');
+const log = require('./logger');
 
 // In-memory prepared-handle store for oxmysql's store()/rawExecute(). Handles
 // are integers and explicitly do NOT survive a restart (documented refusal).
@@ -104,9 +101,12 @@ async function boot() {
 // bare `exports` global is the citizen function (in a require()'d sub-module it
 // would be that module's module.exports instead -- see exports.js's header).
 // globalThis.exports covers builds that expose it only as a global.
-const registerExport = (typeof exports === 'function')
-    ? exports
-    : (typeof globalThis !== 'undefined' && typeof globalThis.exports === 'function' ? globalThis.exports : null);
+// Bundlers execute this inside their own CommonJS wrapper, where bare
+// `exports` may be module.exports. Oxmysql solves the same problem by reading
+// the citizen registrar from the global object; prefer that path here too.
+const registerExport = (typeof globalThis !== 'undefined' && typeof globalThis.exports === 'function')
+    ? globalThis.exports
+    : (typeof exports === 'function' ? exports : null);
 
 if (!registerExport) {
     log.error('index', 'FiveM export registrar not found on `exports`/`globalThis.exports` -- cannot register the API.');
