@@ -36,6 +36,9 @@ const api = {
     _readyPromise: null,
     _readyResolve: null,
     _readyReject: null,
+    // store() is deliberately synchronous and may be called by a compatibility
+    // consumer during resource startup, before the pool's first await settles.
+    store: new HandleStore(),
 
     isReady() { return this._ready; },
     version() {
@@ -78,8 +81,6 @@ async function boot() {
     api.cfg = cfg;
     api.statements = new StatementCache(cfg.statementCache);
     api.stats = new Stats(cfg.slowThreshold, cfg.slowRing);
-    api.store = new HandleStore();
-
     const pools = await poolBuilder.build(cfg);
     api.pools = pools;
     api.executor = new Executor(pools, api.statements, api.stats);

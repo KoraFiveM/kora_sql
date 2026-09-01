@@ -57,7 +57,13 @@ function register(api, exports) {
                 }
                 break;
             }
+            // Export registration happens before the asynchronous pool boot
+            // completes. Compatibility consumers commonly issue their first
+            // query while their own server script is loading, so every data
+            // call must queue behind readiness rather than dereference an
+            // executor/transaction/queue that does not exist yet.
             const p = Promise.resolve()
+                .then(() => api.ready())
                 .then(() => impl(...args, resource))
                 .then((res) => { reply(name, cb, res, null); return res; })
                 .catch((err) => {
@@ -85,6 +91,18 @@ function register(api, exports) {
     // resource-peeling above doesn't eat a legitimate string SQL argument.
     function implArity(impl) {
         return Math.max(0, impl.length - 1);
+    }
+
+    // Preserve enqueue's synchronous, fire-and-forget hot path once booted,
+    // while retaining writes submitted during the short startup window.
+    function enqueueWhenReady(name, impl) {
+        if (api.isReady()) {
+            impl();
+            return;
+        }
+        api.ready()
+            .then(impl)
+            .catch((err) => log.error('exports', `${name} failed before qbsql became ready: ${err.message}`));
     }
 
     // --- readiness / version ---
@@ -118,8 +136,12 @@ function register(api, exports) {
     });
 
     // --- the coalescing write path ---
-    exports('enqueue', (table, key, row, opts) => { api.queue.enqueue(table, key, row, opts); });
-    exports('enqueueMany', (table, key, rows, opts) => { api.queue.enqueueMany(table, key, rows, opts); });
+    exports('enqueue', (table, key, row, opts) => {
+        enqueueWhenReady('enqueue', () => api.queue.enqueue(table, key, row, opts));
+    });
+    exports('enqueueMany', (table, key, rows, opts) => {
+        enqueueWhenReady('enqueueMany', () => api.queue.enqueueMany(table, key, rows, opts));
+    });
     dataExport('upsert', (table, key, rows, opts, resource) => {
         // Immediate awaited batched upsert -- same builder as the queue, but
         // flushed now and its result returned.
@@ -128,7 +150,8 @@ function register(api, exports) {
     });
     exports('flush', function (table, cb) {
         if (typeof table === 'function') { cb = table; table = undefined; }
-        api.queue.flush(table)
+        api.ready()
+            .then(() => api.queue.flush(table))
             .then(() => reply('flush', cb, true, null))
             .catch((e) => reply('flush', cb, false, String(e.message)));
     });
