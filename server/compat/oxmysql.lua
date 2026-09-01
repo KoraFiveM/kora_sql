@@ -113,10 +113,18 @@ local function isReady()
     return exports.qbsql:isReady()
 end
 
+-- These are the two exports oxmysql consumers commonly use while booting:
+-- isReady gates resource startup and query is the primary data path. Register
+-- them explicitly below instead of relying on the bulk compatibility table so
+-- the provider always installs the exact __cfx_export_oxmysql_* handlers.
+local query = guarded(asyncCall('query'))
+
 -- Registration table. Async names take (query, params, cb); Sync names block
--- and return. transaction/rawExecute/store/isReady are special-cased above.
-local asyncNames = { 'execute', 'query', 'scalar', 'single', 'insert', 'update', 'prepare' }
-local registrations = {}
+-- and return. query/isReady and transaction/rawExecute/store are special-cased.
+local asyncNames = { 'execute', 'scalar', 'single', 'insert', 'update', 'prepare' }
+local registrations = {
+    querySync = syncCall('query'),
+}
 
 for _, name in ipairs(asyncNames) do
     -- oxmysql maps `prepare` onto its own prepared path; we route it to execute
@@ -153,7 +161,9 @@ registrations.rawExecuteSync = function(handle, params)
 end
 registrations.store = store
 registrations.prepareSync = registrations.prepareSync or syncCall('execute')
-registrations.isReady = isReady
+
+provideExport('oxmysql', 'query', query)
+provideExport('oxmysql', 'isReady', isReady)
 
 for exportName, func in pairs(registrations) do
     provideExport('oxmysql', exportName, func)

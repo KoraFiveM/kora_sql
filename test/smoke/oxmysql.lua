@@ -35,6 +35,13 @@ h.test('query forwards the invoking resource as the trailing argument', function
     h.assertEqual(resource, 'some-other-resource', 'invoking resource not forwarded')
 end)
 
+h.test('isReady forwards the qbsql readiness result', function()
+    exports.qbsql.isReady = function() return true end
+
+    local isReady = handle.getExport('oxmysql', 'isReady')
+    h.assertTrue(isReady(), 'oxmysql:isReady should return qbsql readiness')
+end)
+
 h.test('params default to an empty table when omitted-as-nil', function()
     handle.setInvokingResource('r')
     local query = handle.getExport('oxmysql', 'query')
