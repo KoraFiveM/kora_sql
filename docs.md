@@ -120,9 +120,9 @@ original calling resource, not to qbsql.
 
 ## mysql-async compat
 
-`shared_script '@oxmysql/lib/MySQL.lua'` works unchanged through the bundled
-`stubs/oxmysql` resource; `@qbsql/lib/MySQL.lua` is the direct equivalent. Both
-install the full current `MySQL` global: callable top-level methods with
+`shared_script '@oxmysql/lib/MySQL.lua'` works unchanged through qbsql's
+provided identity; `@qbsql/lib/MySQL.lua` is the direct equivalent. Both install
+the full current `MySQL` global: callable top-level methods with
 `.await`, lazy `MySQL.Async.*`/`MySQL.Sync.*` aliases, stored-query handles,
 `MySQL.ready`/`.ready.await`, and `MySQL.startTransaction`.
 

@@ -63,10 +63,12 @@ hands to `stats.js`. Without this, every slow query is attributed to `qbsql`.
 `params` is always normalised to a table before crossing so the wrapper's
 trailing-argument peeling has a stable argument count.
 
-The `@oxmysql/lib/MySQL.lua` file-include problem CANNOT be solved by the export
-hijack — FiveM resolves `@oxmysql/...` against a real directory. `stubs/oxmysql/`
-and `stubs/mysql-async/` are two-file drop-in resources (copy into `resources/`,
-`ensure` after qbsql) that forward the include into qbsql's `lib/MySQL.lua`.
+Current FXServer resolves `@oxmysql/lib/MySQL.lua` and
+`@mysql-async/lib/MySQL.lua` through qbsql's `provide` identities to the root
+`lib/MySQL.lua`; the test server's untouched legacy manifests verify this at
+startup. Export identity still requires the manual handlers above. The
+`stubs/oxmysql/` and `stubs/mysql-async/` resources remain optional fallbacks
+for older tooling/deployment scanners that require a literal directory.
 
 ## Refused, loudly
 - Multi-statement queries (`multipleStatements: false`; config-gated escape hatch

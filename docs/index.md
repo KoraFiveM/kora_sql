@@ -55,11 +55,11 @@ set qbsql_allow_multiple_statements false
 set qbsql_debug false
 ```
 
-For a zero-touch drop-in replacing an actual `oxmysql`/`mysql-async` resource,
-copy the two-file stubs from `stubs/oxmysql/` or `stubs/mysql-async/` into
-`resources/` and `ensure` them after qbsql — they forward `@oxmysql/lib/MySQL.lua`
--style file includes into qbsql's own `lib/MySQL.lua`, which FiveM's file
-resolution can't do across resources on its own.
+The provided `oxmysql` and `mysql-async` identities also resolve resource-file
+includes on current FXServer, so existing `@oxmysql/lib/MySQL.lua` and
+`@mysql-async/lib/MySQL.lua` manifest entries load qbsql's `lib/MySQL.lua`
+without edits. The two-file resources under `stubs/` remain optional fallbacks
+for older tooling or deployment systems that insist on a literal directory.
 
 ## Usage examples
 
@@ -123,8 +123,8 @@ local rows = exports.oxmysql:query('SELECT * FROM players WHERE license = ?', { 
 exports.oxmysql:insert('INSERT INTO logs (player, message) VALUES (?, ?)', { citizenid, message },
     function(insertId) print(insertId) end)
 
--- mysql-async's `MySQL` global works the same way, via
--- shared_script '@qbsql/lib/MySQL.lua' (or the stubs/mysql-async drop-in):
+-- mysql-async's `MySQL` global works through its existing include unchanged;
+-- @qbsql/lib/MySQL.lua is also available as an explicit direct include:
 local job = MySQL.query.await('SELECT job FROM players WHERE citizenid = ?', { citizenid })
 MySQL.Async.execute('UPDATE players SET last_updated = NOW() WHERE citizenid = ?', { citizenid })
 ```
@@ -191,9 +191,9 @@ the SQL text unchanged. Multi-statement strings are refused unless
 attributed to the original calling resource, not to qbsql.
 
 ### mysql-async compat
-`shared_script '@oxmysql/lib/MySQL.lua'` works unchanged through the bundled
-`stubs/oxmysql` resource; `@qbsql/lib/MySQL.lua` is the direct equivalent. Both
-build the complete current `MySQL` global: callable dual methods and `.await`,
+`shared_script '@oxmysql/lib/MySQL.lua'` works unchanged through qbsql's
+provided identity; `@qbsql/lib/MySQL.lua` is the direct equivalent. Both build
+the complete current `MySQL` global: callable dual methods and `.await`,
 lazy `MySQL.Async.*`/`MySQL.Sync.*`, stored-query handles,
 `MySQL.ready`/`.ready.await`, and `MySQL.startTransaction`.
 
