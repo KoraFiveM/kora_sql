@@ -18,7 +18,10 @@ const { WriteQueue } = require('./queue');
 const { TransactionRunner } = require('./transaction');
 const { Migrator } = require('./migrate');
 const { register } = require('./exports');
+const { connectWithRetry } = require('./startup');
 const log = require('./logger');
+
+let stopping = false;
 
 // In-memory prepared-handle store for oxmysql's store()/rawExecute(). Handles
 // are integers and explicitly do NOT survive a restart (documented refusal).
@@ -78,7 +81,16 @@ async function boot() {
     api.cfg = cfg;
     api.statements = new StatementCache(cfg.statementCache);
     api.stats = new Stats(cfg.slowThreshold, cfg.slowRing);
-    const pools = await poolBuilder.build(cfg);
+    const pools = await connectWithRetry(poolBuilder.build, cfg, {
+        retryInterval: cfg.connectRetryInterval,
+        shouldStop: () => stopping,
+        onRetry: (err, attempt, retryInterval) => {
+            log.warn(
+                'pool',
+                `database unavailable (${err.code || err.message}); retry ${attempt} in ${retryInterval}ms`
+            );
+        },
+    });
     api.pools = pools;
     api.executor = new Executor(pools, api.statements, api.stats);
     api.queue = new WriteQueue(api.executor, pools, api.stats, cfg);
@@ -115,6 +127,7 @@ if (!registerExport) {
 }
 
 boot().catch((err) => {
+    if (err.code === 'QBSQL_STOPPING') return;
     log.error('index', `FAILED TO START: ${err.message}`);
     log.error('index', err.stack || '');
     api._ready = false;
@@ -125,6 +138,7 @@ boot().catch((err) => {
 // in-flight queue. Bounded by whatever the runtime allows the handler.
 on('onResourceStop', (resourceName) => {
     if (resourceName !== GetCurrentResourceName()) return;
+    stopping = true;
     if (api.queue) {
         api.queue.flush().catch((e) => log.error('index', `stop-flush failed: ${e.message}`));
     }

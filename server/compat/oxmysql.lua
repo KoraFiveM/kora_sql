@@ -127,9 +127,7 @@ local registrations = {
 }
 
 for _, name in ipairs(asyncNames) do
-    -- oxmysql maps `prepare` onto its own prepared path; we route it to execute
-    -- (mysql2 prepares transparently), preserving the callback contract.
-    local jsName = (name == 'prepare') and 'execute' or name
+    local jsName = name
     registrations[name] = guarded(asyncCall(jsName))
     registrations[name .. 'Sync'] = function(query, params) return syncCall(jsName)(query, params) end
 end
@@ -160,7 +158,7 @@ registrations.rawExecuteSync = function(handle, params)
     return res
 end
 registrations.store = store
-registrations.prepareSync = registrations.prepareSync or syncCall('execute')
+registrations.prepareSync = registrations.prepareSync or syncCall('prepare')
 
 provideExport('oxmysql', 'query', query)
 provideExport('oxmysql', 'isReady', isReady)

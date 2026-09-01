@@ -18,6 +18,7 @@ code works unmodified).
    set qbsql_read_pool_size 16
    set qbsql_write_pool_size 8
    set qbsql_statement_cache 256      # cache * (read+write pools) must be <= 8000
+   set qbsql_connect_retry_interval 2000 # ms between startup connection retries
    set qbsql_flush_interval 250       # ms between coalescing flushes
    set qbsql_max_pending_rows 500     # high-water mark that forces a flush
    set qbsql_slow_threshold 150       # ms; queries slower than this hit the slow log
@@ -28,6 +29,11 @@ code works unmodified).
 Source contributors run `yarn install` and `yarn build` after changing the JS
 driver or its dependencies. Those development dependencies are not needed by
 the running FiveM resource.
+
+If MySQL is still starting when FXServer loads qbsql, qbsql keeps retrying
+network connection failures and holds database exports until it is ready. A
+server or resource restart is not required. Authentication, database-name, and
+other non-network configuration errors still fail immediately.
 
 ## `QB.sql.*` (modern)
 

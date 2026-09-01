@@ -94,7 +94,10 @@ async function build(cfg) {
         };
         log.info('pool', `connected to ${raw} (read=${cfg.readPoolSize} write=${cfg.writePoolSize})`);
     } catch (err) {
-        log.error('pool', `version probe failed -- pool may not be reachable: ${err.message}`);
+        // A failed mysql2 pool is not reusable. Close both sides before the
+        // startup retry creates fresh pools, otherwise every attempt leaks
+        // timers and sockets while the database is unavailable.
+        await Promise.allSettled([read.end(), write.end()]);
         throw err;
     }
 

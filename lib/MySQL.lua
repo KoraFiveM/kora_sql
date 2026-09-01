@@ -84,7 +84,7 @@ MySQL.scalar      = makeDual('scalar')
 MySQL.single      = makeDual('single')
 MySQL.insert      = makeDual('insert')
 MySQL.update      = makeDual('update')
-MySQL.prepare     = makeDual('execute')
+MySQL.prepare     = makeDual('prepare')
 MySQL.rawExecute  = makeDual('execute')
 
 MySQL.transaction = setmetatable({

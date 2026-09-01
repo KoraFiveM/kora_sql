@@ -38,6 +38,11 @@ JS at boot (startup race — a query could arrive before the pool exists); a sec
 JSON config format. `mysql_connection_string` is deliberately oxmysql's convar
 name so an existing server.cfg migrates untouched.
 
+At boot, transient network failures are retried by `server/js/startup.js` while
+the one shared readiness promise remains pending. Do not reject readiness for a
+recoverable `ECONNREFUSED`/`ETIMEDOUT`-style race: exports deliberately wait on
+that promise so consumers resume without restarting once MySQL is reachable.
+
 ## The FiveM export-registration gotcha
 FiveM's citizen `exports(name, fn)` registrar is the bare `exports` global **only
 in the resource entry file**. In a `require()`'d CommonJS sub-module, bare

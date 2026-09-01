@@ -67,7 +67,13 @@ function register(api, exports) {
                 .then(() => impl(...args, resource))
                 .then((res) => { reply(name, cb, res, null); return res; })
                 .catch((err) => {
-                    log.error('exports', `${name} failed: ${err.message}`);
+                    // Match oxmysql's useful failure diagnostics: identify the
+                    // consumer and SQL without dumping bind values (which may
+                    // contain passwords, identifiers, or character data).
+                    const sql = typeof args[0] === 'string'
+                        ? args[0].replace(/\s+/g, ' ').trim().slice(0, 500)
+                        : '<non-SQL call>';
+                    log.error('exports', `${name} failed for ${resource || 'unknown'}: ${err.message}; SQL: ${sql}`);
                     if (cb) { reply(name, cb, null, String(err.message)); return null; }
                     // No callback: rethrow so a Citizen.Await on the Lua side rejects.
                     throw err;
@@ -119,6 +125,7 @@ function register(api, exports) {
     dataExport('execute', (sql, params, resource) => api.executor.execute(sql, params, resource));
     dataExport('insert', (sql, params, resource) => api.executor.insert(sql, params, resource));
     dataExport('update', (sql, params, resource) => api.executor.update(sql, params, resource));
+    dataExport('prepare', (sql, params, resource) => api.executor.prepare(sql, params, resource));
 
     // --- transaction / batch ---
     dataExport('transaction', (queries, params, resource) => api.txn.transaction(queries, params));

@@ -106,6 +106,7 @@ function load() {
         slowThreshold: getIntConvar('qbsql_slow_threshold', 150),
         slowRing: getIntConvar('qbsql_slow_ring', 200),
         allowMultipleStatements: getBoolConvar('qbsql_allow_multiple_statements', false),
+        connectRetryInterval: Math.max(250, getIntConvar('qbsql_connect_retry_interval', 2000)),
         debug: getBoolConvar('qbsql_debug', false),
     };
 

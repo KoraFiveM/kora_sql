@@ -119,6 +119,7 @@ var require_config = __commonJS({
         slowThreshold: getIntConvar("qbsql_slow_threshold", 150),
         slowRing: getIntConvar("qbsql_slow_ring", 200),
         allowMultipleStatements: getBoolConvar("qbsql_allow_multiple_statements", false),
+        connectRetryInterval: Math.max(250, getIntConvar("qbsql_connect_retry_interval", 2e3)),
         debug: getBoolConvar("qbsql_debug", false)
       };
       log2.setDebug(cfg.debug);
@@ -20732,7 +20733,7 @@ var require_pool4 = __commonJS({
         };
         log2.info("pool", `connected to ${raw} (read=${cfg.readPoolSize} write=${cfg.writePoolSize})`);
       } catch (err) {
-        log2.error("pool", `version probe failed -- pool may not be reachable: ${err.message}`);
+        await Promise.allSettled([read.end(), write.end()]);
         throw err;
       }
       return { read, write, version };
@@ -21064,6 +21065,26 @@ var require_execute3 = __commonJS({
       async update(sql, params, resource) {
         const r = await this.execute(sql, params, resource);
         return r.affectedRows;
+      }
+      // oxmysql's prepare API accepts either one parameter list or an array of
+      // parameter lists, executes each set, and unpacks each response. This is
+      // distinct from qbsql's execute() OkPacket-shaped modern API.
+      async prepare(sql, params, resource) {
+        const normal = normalizeParams(params);
+        const sets = Array.isArray(normal) && normal.length > 0 && normal.every(Array.isArray) ? normal.map(normalizeParams) : [normal];
+        const responses = [];
+        for (const values of sets) {
+          const result = await this.runOne(sql, values, resource);
+          const verb = sql.trimStart().split(/\s+/, 1)[0].toUpperCase();
+          if (verb === "INSERT") responses.push(result.insertId || 0);
+          else if (verb === "UPDATE" || verb === "DELETE") responses.push(result.affectedRows || 0);
+          else if (Array.isArray(result)) {
+            const row = result[0] || null;
+            if (row && Object.keys(row).length === 1) responses.push(Object.values(row)[0]);
+            else responses.push(row);
+          } else responses.push(result);
+        }
+        return responses.length === 1 ? responses[0] : responses;
       }
     };
     __name(_Executor, "Executor");
@@ -21669,7 +21690,8 @@ var require_exports = __commonJS({
             reply(name, cb, res, null);
             return res;
           }).catch((err) => {
-            log2.error("exports", `${name} failed: ${err.message}`);
+            const sql = typeof args[0] === "string" ? args[0].replace(/\s+/g, " ").trim().slice(0, 500) : "<non-SQL call>";
+            log2.error("exports", `${name} failed for ${resource || "unknown"}: ${err.message}; SQL: ${sql}`);
             if (cb) {
               reply(name, cb, null, String(err.message));
               return null;
@@ -21707,6 +21729,7 @@ var require_exports = __commonJS({
       dataExport("execute", (sql, params, resource) => api2.executor.execute(sql, params, resource));
       dataExport("insert", (sql, params, resource) => api2.executor.insert(sql, params, resource));
       dataExport("update", (sql, params, resource) => api2.executor.update(sql, params, resource));
+      dataExport("prepare", (sql, params, resource) => api2.executor.prepare(sql, params, resource));
       dataExport("transaction", (queries, params, resource) => api2.txn.transaction(queries, params));
       dataExport("batch", (queries, params, resource) => api2.txn.batch(queries, params));
       exports3("store", (sql) => api2.store.put(sql));
@@ -21754,6 +21777,60 @@ var require_exports = __commonJS({
   }
 });
 
+// server/js/startup.js
+var require_startup = __commonJS({
+  "server/js/startup.js"(exports2, module2) {
+    "use strict";
+    var TRANSIENT_CODES = /* @__PURE__ */ new Set([
+      "ECONNREFUSED",
+      "ECONNRESET",
+      "ETIMEDOUT",
+      "EHOSTUNREACH",
+      "ENETUNREACH",
+      "EPIPE",
+      "PROTOCOL_CONNECTION_LOST"
+    ]);
+    function isTransientConnectionError(err) {
+      let current = err;
+      while (current) {
+        if (TRANSIENT_CODES.has(current.code)) return true;
+        current = current.cause;
+      }
+      return false;
+    }
+    __name(isTransientConnectionError, "isTransientConnectionError");
+    function sleep(ms) {
+      return new Promise((resolve) => setTimeout(resolve, ms));
+    }
+    __name(sleep, "sleep");
+    async function connectWithRetry2(build, cfg, options = {}) {
+      const delay = options.delay || sleep;
+      const retryInterval = options.retryInterval || 2e3;
+      const shouldStop = options.shouldStop || (() => false);
+      const onRetry = options.onRetry || (() => {
+      });
+      let attempt = 0;
+      for (; ; ) {
+        try {
+          return await build(cfg);
+        } catch (err) {
+          if (!isTransientConnectionError(err) || shouldStop()) throw err;
+          attempt++;
+          onRetry(err, attempt, retryInterval);
+          await delay(retryInterval);
+          if (shouldStop()) {
+            const stopped = new Error("qbsql stopped while waiting for the database");
+            stopped.code = "QBSQL_STOPPING";
+            throw stopped;
+          }
+        }
+      }
+    }
+    __name(connectWithRetry2, "connectWithRetry");
+    module2.exports = { connectWithRetry: connectWithRetry2, isTransientConnectionError };
+  }
+});
+
 // server/js/index.js
 var cfgLoader = require_config();
 var poolBuilder = require_pool4();
@@ -21764,7 +21841,9 @@ var { WriteQueue } = require_queue();
 var { TransactionRunner } = require_transaction();
 var { Migrator } = require_migrate();
 var { register } = require_exports();
+var { connectWithRetry } = require_startup();
 var log = require_logger();
+var stopping = false;
 var _HandleStore = class _HandleStore {
   constructor() {
     this.map = /* @__PURE__ */ new Map();
@@ -21821,7 +21900,16 @@ async function boot() {
   api.cfg = cfg;
   api.statements = new StatementCache(cfg.statementCache);
   api.stats = new Stats(cfg.slowThreshold, cfg.slowRing);
-  const pools = await poolBuilder.build(cfg);
+  const pools = await connectWithRetry(poolBuilder.build, cfg, {
+    retryInterval: cfg.connectRetryInterval,
+    shouldStop: /* @__PURE__ */ __name(() => stopping, "shouldStop"),
+    onRetry: /* @__PURE__ */ __name((err, attempt, retryInterval) => {
+      log.warn(
+        "pool",
+        `database unavailable (${err.code || err.message}); retry ${attempt} in ${retryInterval}ms`
+      );
+    }, "onRetry")
+  });
   api.pools = pools;
   api.executor = new Executor(pools, api.statements, api.stats);
   api.queue = new WriteQueue(api.executor, pools, api.stats, cfg);
@@ -21841,6 +21929,7 @@ if (!registerExport) {
   register(api, registerExport);
 }
 boot().catch((err) => {
+  if (err.code === "QBSQL_STOPPING") return;
   log.error("index", `FAILED TO START: ${err.message}`);
   log.error("index", err.stack || "");
   api._ready = false;
@@ -21848,6 +21937,7 @@ boot().catch((err) => {
 });
 on("onResourceStop", (resourceName) => {
   if (resourceName !== GetCurrentResourceName()) return;
+  stopping = true;
   if (api.queue) {
     api.queue.flush().catch((e) => log.error("index", `stop-flush failed: ${e.message}`));
   }

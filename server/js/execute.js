@@ -148,6 +148,31 @@ class Executor {
         const r = await this.execute(sql, params, resource);
         return r.affectedRows;
     }
+
+    // oxmysql's prepare API accepts either one parameter list or an array of
+    // parameter lists, executes each set, and unpacks each response. This is
+    // distinct from qbsql's execute() OkPacket-shaped modern API.
+    async prepare(sql, params, resource) {
+        const normal = normalizeParams(params);
+        const sets = Array.isArray(normal) && normal.length > 0 && normal.every(Array.isArray)
+            ? normal.map(normalizeParams)
+            : [normal];
+        const responses = [];
+
+        for (const values of sets) {
+            const result = await this.runOne(sql, values, resource);
+            const verb = sql.trimStart().split(/\s+/, 1)[0].toUpperCase();
+            if (verb === 'INSERT') responses.push(result.insertId || 0);
+            else if (verb === 'UPDATE' || verb === 'DELETE') responses.push(result.affectedRows || 0);
+            else if (Array.isArray(result)) {
+                const row = result[0] || null;
+                if (row && Object.keys(row).length === 1) responses.push(Object.values(row)[0]);
+                else responses.push(row);
+            } else responses.push(result);
+        }
+
+        return responses.length === 1 ? responses[0] : responses;
+    }
 }
 
 module.exports = { Executor, normalizeParams, NULL_SENTINEL };
