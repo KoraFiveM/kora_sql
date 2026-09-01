@@ -6,7 +6,9 @@ code works unmodified).
 
 ## Setup
 
-1. `npm install` (or `pnpm install`) inside the `qbsql` folder.
+1. Keep FiveM's standard `yarn` builder resource installed. qbsql declares it
+   as a dependency, so `mysql2` is installed automatically inside qbsql before
+   its server scripts start.
 2. In `server.cfg`, before any resource that queries:
    ```
    set mysql_connection_string "mysql://user:pass@localhost/qbcore?charset=utf8mb4"
@@ -23,6 +25,11 @@ code works unmodified).
    set qbsql_allow_multiple_statements false
    set qbsql_debug false
    ```
+
+If the server distribution does not include the standard `yarn` builder, add
+it from `cfx-server-data` before starting qbsql. Do not install `mysql2` in a
+user-profile or server-root `node_modules` folder: FXServer's filesystem
+sandbox only permits qbsql to load the copy installed inside its own resource.
 
 ## `QB.sql.*` (modern)
 

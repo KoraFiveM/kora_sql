@@ -74,9 +74,11 @@ qbsql owns the runner (`server/js/migrate.js`); each resource owns its files. A
 checksum mismatch on an already-applied version is a **hard boot abort** — never
 a warning. `qbsql_migrations` and `qbsql_deadletter` are bootstrapped at boot.
 
-## Build step
-`npm install` (or `pnpm install`) in this folder — that is the entire build.
-mysql2 is pure JS, resolved from `node_modules/` (gitignored). No bundler.
+## Dependency install
+The manifest declares FiveM's standard `yarn` builder as a dependency. It
+installs mysql2 into this resource's `node_modules/` directory before qbsql
+starts, which keeps package reads inside FXServer's filesystem sandbox. Keep
+`yarn.lock` committed and `node_modules/` ignored. There is no bundler.
 
 ## Testing
 `test/run.sh` runs the Lua smoke tests (plain lua5.4) then the JS suite

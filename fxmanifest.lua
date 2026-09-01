@@ -16,6 +16,11 @@ provide 'oxmysql'
 provide 'mysql-async'
 provide 'ghmattimysql'
 
+-- Ask FiveM's standard yarn builder to install package.json dependencies into
+-- this resource before any server script runs. Keeping mysql2 under qbsql's
+-- own node_modules directory is required by FXServer's filesystem sandbox.
+dependency 'yarn'
+
 files {
     'init.lua',       -- '@qbsql/init.lua' -- installs QB.sql.* into a consumer VM
     'lib/MySQL.lua'   -- '@qbsql/lib/MySQL.lua' -- the mysql-async/oxmysql `MySQL` global
@@ -46,5 +51,5 @@ server_scripts {
     'server/compat/ghmattimysql.lua'
 }
 
--- mysql2 lives in node_modules/ (gitignored) -- run `npm install` (or
--- `pnpm install`) in this folder once. That is the entire build step.
+-- mysql2 is installed into node_modules/ (gitignored) by the yarn dependency
+-- above before qbsql starts. No manual package install or bundling is needed.
