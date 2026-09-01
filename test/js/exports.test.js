@@ -101,3 +101,26 @@ test('a boot failure reaches callback callers as the real startup error', async 
 
     assert.deepEqual(await result, { value: null, err: 'database unavailable' });
 });
+
+test('oxmysql async aliases are genuine JS promise exports', async () => {
+    const provided = {};
+    const previousOn = globalThis.on;
+    globalThis.on = (name, handler) => {
+        handler((fn) => { provided[name] = fn; });
+    };
+    try {
+        const gate = deferred();
+        const { api } = harness(gate);
+        api.executor = { query: async () => [{ value: 1 }] };
+        gate.resolve(true);
+
+        for (const name of ['query_async', 'execute_async', 'fetch_async', 'rawExecute_async', 'store_async']) {
+            assert.equal(typeof provided[`__cfx_export_oxmysql_${name}`], 'function', `missing ${name}`);
+        }
+        assert.ok(provided.__cfx_export_oxmysql_query_async('SELECT 1', []) instanceof Promise);
+        assert.deepEqual(await provided.__cfx_export_oxmysql_query_async('SELECT 1', []), [{ value: 1 }]);
+        assert.equal(await provided.__cfx_export_oxmysql_store_async('SELECT 42'), 'SELECT 42');
+    } finally {
+        globalThis.on = previousOn;
+    }
+});

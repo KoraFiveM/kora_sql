@@ -46,7 +46,7 @@ function register(api, exports) {
     if (typeof exports !== 'function') throw new Error('qbsql/exports: registrar not supplied');
     // A data call: (sql, params, [cb], [resource]) in any trailing combination.
     function dataExport(name, impl) {
-        exports(name, function (...args) {
+        const exported = function (...args) {
             // Peel trailing cb / resource off the argument list.
             let cb = null, resource = null;
             while (args.length) {
@@ -90,7 +90,23 @@ function register(api, exports) {
                 p.catch(() => {});
                 return p;
             }
-        });
+        };
+        exports(name, exported);
+        return exported;
+    }
+
+    // oxmysql's `_async` exports are registered by its JS host and return a
+    // genuine JS promise. A Lua identity shim cannot safely recreate that
+    // cross-runtime promise, so publish only those aliases directly under the
+    // provided resource identity. The normal/callback exports remain in the
+    // Lua bridge where compatibility convars and the multi-statement guard live.
+    function provideForeign(resource, name, fn) {
+        if (typeof globalThis.on !== 'function') return;
+        globalThis.on(`__cfx_export_${resource}_${name}`, (setCb) => setCb(fn));
+    }
+
+    function oxAsync(name, exported) {
+        provideForeign('oxmysql', `${name}_async`, (...args) => exported(...args));
     }
 
     // Best-effort arity of the impl minus its trailing `resource` param, so the
@@ -112,35 +128,71 @@ function register(api, exports) {
     }
 
     // --- readiness / version ---
-    exports('isReady', () => api.isReady());
+    const isReady = () => api.isReady();
+    exports('isReady', isReady);
     exports('version', () => api.version());
+    const awaitConnection = function () {
+        return Promise.resolve().then(() => api.ready()).then(() => true);
+    };
+    exports('awaitConnection', awaitConnection);
+    provideForeign('oxmysql', 'isReady_async', () => Promise.resolve(isReady()));
+    provideForeign('oxmysql', 'awaitConnection_async', awaitConnection);
     exports('awaitReady', function (cb) {
         api.ready().then(() => reply('awaitReady', cb, true, null)).catch((e) => reply('awaitReady', cb, false, String(e.message)));
     });
 
     // --- core data path ---
-    dataExport('query', (sql, params, resource) => api.executor.query(sql, params, resource));
-    dataExport('single', (sql, params, resource) => api.executor.single(sql, params, resource));
-    dataExport('scalar', (sql, params, resource) => api.executor.scalar(sql, params, resource));
-    dataExport('execute', (sql, params, resource) => api.executor.execute(sql, params, resource));
-    dataExport('insert', (sql, params, resource) => api.executor.insert(sql, params, resource));
-    dataExport('update', (sql, params, resource) => api.executor.update(sql, params, resource));
-    dataExport('prepare', (sql, params, resource) => api.executor.prepare(sql, params, resource));
+    const query = dataExport('query', (sql, params, resource) => api.executor.query(sql, params, resource));
+    const single = dataExport('single', (sql, params, resource) => api.executor.single(sql, params, resource));
+    const scalar = dataExport('scalar', (sql, params, resource) => api.executor.scalar(sql, params, resource));
+    const execute = dataExport('execute', (sql, params, resource) => api.executor.execute(sql, params, resource));
+    const insert = dataExport('insert', (sql, params, resource) => api.executor.insert(sql, params, resource));
+    const update = dataExport('update', (sql, params, resource) => api.executor.update(sql, params, resource));
+    const prepare = dataExport('prepare', (sql, params, resource) => api.executor.prepare(sql, params, resource));
+
+    oxAsync('query', query);
+    oxAsync('fetch', query);
+    oxAsync('execute', query);
+    oxAsync('single', single);
+    oxAsync('scalar', scalar);
+    oxAsync('insert', insert);
+    oxAsync('update', update);
+    oxAsync('prepare', prepare);
 
     // --- transaction / batch ---
-    dataExport('transaction', (queries, params, resource) => api.txn.transaction(queries, params));
+    const transaction = dataExport('transaction', (queries, params, resource) => api.txn.transaction(queries, params, resource));
     dataExport('batch', (queries, params, resource) => api.txn.batch(queries, params));
+    oxAsync('transaction', transaction);
 
     // --- prepared handle store (in-memory, does NOT survive a restart) ---
-    exports('store', (sql) => api.store.put(sql));
-    dataExport('rawExecute', (handle, params, resource) => {
-        const sql = api.store.get(handle);
-        if (!sql) {
+    const store = (sql, cb) => {
+        const handle = api.store.put(sql);
+        reply('store', cb, handle);
+        return handle;
+    };
+    exports('store', store);
+    // oxmysql's compatibility store returns the SQL text unchanged. Keep
+    // qbsql's numeric handle store private to the qbsql identity.
+    provideForeign('oxmysql', 'store_async', (sql) => Promise.resolve(sql));
+    const rawExecute = dataExport('rawExecute', (handle, params, resource) => {
+        const sql = typeof handle === 'number' ? api.store.get(handle) : handle;
+        if (typeof sql !== 'string') {
             log.warn('exports', `rawExecute called with unknown store handle ${handle} -- did the resource restart?`);
             return Promise.resolve(null);
         }
-        return api.executor.execute(sql, params, resource);
+        return api.executor.rawExecute(sql, params, resource);
     });
+    oxAsync('rawExecute', rawExecute);
+
+    const startTransaction = function (callback, resource) {
+        const p = Promise.resolve()
+            .then(() => api.ready())
+            .then(() => api.txn.startTransaction(callback, resource));
+        p.catch(() => {});
+        return p;
+    };
+    exports('startTransaction', startTransaction);
+    provideForeign('oxmysql', 'startTransaction_async', startTransaction);
 
     // --- the coalescing write path ---
     exports('enqueue', (table, key, row, opts) => {

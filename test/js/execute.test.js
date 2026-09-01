@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { Executor } = require('../../server/js/execute');
+const { Executor, normalizeNamedPlaceholders } = require('../../server/js/execute');
 
 function harness(results) {
     const calls = [];
@@ -41,4 +41,36 @@ test('oxmysql prepare unpacks one-column and one-row SELECT responses', async ()
         await single.executor.prepare('SELECT citizenid, name FROM players WHERE citizenid = ?', ['CID1']),
         { citizenid: 'CID1', name: 'A' }
     );
+});
+
+test('query preserves write ResultSetHeader fields like oxmysql', async () => {
+    const result = { affectedRows: 2, insertId: 17, warningStatus: 0 };
+    const { executor } = harness([result]);
+    assert.deepEqual(await executor.query('INSERT INTO test VALUES (?)', [1]), result);
+});
+
+test('rawExecute returns oxmysql raw result values and supports multiple bind sets', async () => {
+    const { executor } = harness([
+        [{ value: 1 }],
+        [{ value: 2 }],
+    ]);
+
+    // mysql2 fields metadata is internal; oxmysql's rawExecute exposes only
+    // the raw row/result values and flattens batch results.
+    assert.deepEqual(await executor.rawExecute('SELECT ? AS value', [[1], [2]]), [
+        [{ value: 1 }],
+        [{ value: 2 }],
+    ]);
+});
+
+test('mysql-async @name placeholders normalize without touching literals/comments', () => {
+    const result = normalizeNamedPlaceholders(
+        "SELECT '@literal', col FROM users WHERE id = @id AND tag = :tag -- @comment\nAND email = @email",
+        { '@id': 7, ':tag': 'x', email: 'a@example.com' },
+    );
+    assert.equal(result.sql,
+        "SELECT '@literal', col FROM users WHERE id = :id AND tag = :tag -- @comment\nAND email = :email");
+    assert.equal(result.params.id, 7);
+    assert.equal(result.params.tag, 'x');
+    assert.equal(result.params.email, 'a@example.com');
 });

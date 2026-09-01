@@ -178,16 +178,24 @@ Non-yielding callback variants exist for every yielding call above —
 `executeAsync`, `insertAsync`, `updateAsync` — with `cb(result, errString)`.
 
 ### oxmysql compat
-`exports.oxmysql:execute/query/scalar/single/insert/update/transaction/store/
-rawExecute/isReady`, plus every `*Sync` variant, work unmodified. Multi-statement
-strings are refused unless `qbsql_allow_multiple_statements true` is set. Slow
-queries are attributed to the calling resource, not to qbsql.
+The full current export surface works through `exports.oxmysql`: `query`,
+deprecated `execute`/`fetch`, `single`, `scalar`, `insert`, `update`, `prepare`,
+`transaction`, `rawExecute`, `store`, `isReady`, `awaitConnection`, and
+experimental `startTransaction`, together with every `_async` promise export
+and `*Sync` alias. Callback-as-second-argument, named `@`/`:` binds, all
+transaction input shapes, rollback-to-`false`, and the
+`oxmysql:transaction-error` event are retained. `rawExecute` exposes raw
+rows/result headers without mysql2 field metadata, and oxmysql `store` returns
+the SQL text unchanged. Multi-statement strings are refused unless
+`qbsql_allow_multiple_statements true` is set. Slow queries are
+attributed to the original calling resource, not to qbsql.
 
 ### mysql-async compat
-`shared_script '@qbsql/lib/MySQL.lua'` (or the `stubs/mysql-async` drop-in)
-builds the `MySQL` global: `MySQL.ready`, `MySQL.Async.*`, `MySQL.Sync.*`, and
-`MySQL.query.await` / `.scalar.await` / `.single.await` / `.insert.await` /
-`.update.await` / `.transaction.await`.
+`shared_script '@oxmysql/lib/MySQL.lua'` works unchanged through the bundled
+`stubs/oxmysql` resource; `@qbsql/lib/MySQL.lua` is the direct equivalent. Both
+build the complete current `MySQL` global: callable dual methods and `.await`,
+lazy `MySQL.Async.*`/`MySQL.Sync.*`, stored-query handles,
+`MySQL.ready`/`.ready.await`, and `MySQL.startTransaction`.
 
 ### ghmattimysql compat
 `exports.ghmattimysql:*` is registered the same way as the oxmysql bridge, for

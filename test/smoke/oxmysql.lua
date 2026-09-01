@@ -16,11 +16,33 @@ _G.Config = { compat = { oxmysql = true, warnOnSync = true, allowMultipleStateme
 dofile('server/compat/oxmysql.lua')
 
 h.test('registers the core oxmysql export surface', function()
-    for _, name in ipairs({ 'execute', 'query', 'scalar', 'single', 'insert', 'update',
-                            'executeSync', 'querySync', 'transaction', 'store', 'isReady' }) do
+    for _, name in ipairs({
+        'execute', 'fetch', 'query', 'scalar', 'single', 'insert', 'update', 'prepare', 'rawExecute',
+        'executeSync', 'fetchSync', 'querySync', 'scalarSync', 'singleSync', 'insertSync', 'updateSync',
+        'prepareSync', 'rawExecuteSync', 'transaction', 'transactionSync', 'store', 'storeSync',
+        'isReady', 'isReadySync', 'awaitConnection', 'awaitConnectionSync',
+        'startTransaction', 'startTransactionSync',
+    }) do
         h.assertTrue(handle.getExport('oxmysql', name) ~= nil,
             'missing export oxmysql:' .. name)
     end
+end)
+
+h.test('deprecated execute/fetch aliases retain query result semantics', function()
+    handle.setInvokingResource('legacy-resource')
+    handle.getExport('oxmysql', 'execute')('UPDATE players SET name = ?', { 'A' }, function() end)
+    h.assertTrue(handle.lastCall('query') ~= nil, 'execute must route to query, not qbsql execute OkPacket adapter')
+
+    handle.getExport('oxmysql', 'fetch')('SELECT 1', {}, function() end)
+    h.assertTrue(handle.lastCall('query') ~= nil, 'fetch must route to query')
+end)
+
+h.test('callback may be supplied as the second argument', function()
+    local seen
+    handle.getExport('oxmysql', 'query')('SELECT 1', function(result) seen = result end)
+    h.assertTrue(seen ~= nil, 'second-argument callback should be detected')
+    local call = handle.lastCall('query')
+    h.assertEqual(type(call.args[2]), 'table')
 end)
 
 h.test('query forwards the invoking resource as the trailing argument', function()
@@ -48,6 +70,14 @@ h.test('params default to an empty table when omitted-as-nil', function()
     query('SELECT 1', nil, function() end)
     local call = handle.lastCall('query')
     h.assertEqual(type(call.args[2]), 'table', 'params should be normalised to a table')
+end)
+
+h.test('store matches current oxmysql by returning the SQL text', function()
+    local callbackValue
+    local store = handle.getExport('oxmysql', 'store')
+    local result = store('SELECT 42', function(value) callbackValue = value end)
+    h.assertEqual(result, 'SELECT 42')
+    h.assertEqual(callbackValue, 'SELECT 42')
 end)
 
 h.test('multi-statement queries are refused (callback gets an error)', function()

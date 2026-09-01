@@ -42,6 +42,52 @@ function normalizeParams(params) {
     return Array.from(arr, (v) => (v === undefined || v === NULL_SENTINEL ? null : v));
 }
 
+// oxmysql/mysql-async accept both :name and @name placeholders, including
+// parameter maps whose keys themselves start with @/:. mysql2's native named
+// placeholder compiler only understands :name. Convert @name outside quoted
+// strings/comments and expose unprefixed keys without touching the caller's
+// object.
+function normalizeNamedPlaceholders(sql, params) {
+    if (!params || Array.isArray(params) || typeof params !== 'object') {
+        return { sql, params };
+    }
+
+    let out = sql;
+    if (sql.includes('@')) {
+        out = '';
+        let state = 'code';
+        for (let i = 0; i < sql.length; i++) {
+            let c = sql[i];
+            const next = sql[i + 1];
+            if (state === 'code') {
+                if (c === "'") state = 'single';
+                else if (c === '"') state = 'double';
+                else if (c === '`') state = 'backtick';
+                else if (c === '-' && next === '-') state = 'line';
+                else if (c === '#') state = 'line';
+                else if (c === '/' && next === '*') state = 'block';
+                else if (c === '@' && sql[i - 1] !== '@' && /[A-Za-z_]/.test(next || '')) c = ':';
+            } else if (state === 'single' && c === "'" && sql[i - 1] !== '\\') state = 'code';
+            else if (state === 'double' && c === '"' && sql[i - 1] !== '\\') state = 'code';
+            else if (state === 'backtick' && c === '`') state = 'code';
+            else if (state === 'line' && (c === '\n' || c === '\r')) state = 'code';
+            else if (state === 'block' && c === '*' && next === '/') {
+                out += '*/';
+                i++;
+                state = 'code';
+                continue;
+            }
+            out += c;
+        }
+    }
+
+    const normalized = { ...params };
+    for (const [key, value] of Object.entries(params)) {
+        if (key[0] === '@' || key[0] === ':') normalized[key.slice(1)] = value;
+    }
+    return { sql: out, params: normalized };
+}
+
 class Executor {
     constructor(pools, statements, stats) {
         this.pools = pools;
@@ -61,8 +107,12 @@ class Executor {
         return this.pools.write;
     }
 
-    // The one true executor. Returns the raw mysql2 [rows|result, fields].
-    async runOne(sql, params, resource) {
+    // The one true executor. Returns mysql2's raw [rows|result, fields] pair.
+    // Keeping the pair until the final shape adapter is important for
+    // oxmysql.rawExecute, whose public contract deliberately exposes the raw
+    // response rather than parseResponse's query/single/scalar projections.
+    async runRaw(sql, params, resource) {
+        ({ sql, params } = normalizeNamedPlaceholders(sql, params));
         params = normalizeParams(params);
         const pool = this._poolFor(sql);
         const started = process.hrtime.bigint();
@@ -93,7 +143,7 @@ class Executor {
 
             const rows = result[0];
             rowCount = Array.isArray(rows) ? rows.length : 0;
-            return rows;
+            return result;
         } catch (err) {
             errored = true;
             throw err;
@@ -103,9 +153,17 @@ class Executor {
         }
     }
 
+    async runOne(sql, params, resource) {
+        const result = await this.runRaw(sql, params, resource);
+        return result[0];
+    }
+
     async query(sql, params, resource) {
         const rows = await this.runOne(sql, params, resource);
-        return Array.isArray(rows) ? rows : [];
+        // oxmysql.query is not SELECT-only: INSERT/UPDATE/DELETE return their
+        // ResultSetHeader. The old [] coercion silently discarded insertId and
+        // affectedRows for legacy callers using query/execute/fetch aliases.
+        return rows ?? null;
     }
 
     async single(sql, params, resource) {
@@ -173,6 +231,26 @@ class Executor {
 
         return responses.length === 1 ? responses[0] : responses;
     }
+
+    // oxmysql.rawExecute is prepare without response unpacking. oxmysql's
+    // connection wrapper has already removed mysql2's fields metadata by this
+    // point, so expose result values (rows/ResultSetHeader), not our internal
+    // [result, fields] transport pair. Multiple row/result sets are flattened
+    // the same way upstream appends them to its response array.
+    async rawExecute(sql, params, resource) {
+        const normal = normalizeParams(params);
+        const sets = Array.isArray(normal) && normal.length > 0 && normal.every(Array.isArray)
+            ? normal.map(normalizeParams)
+            : [normal];
+        const responses = [];
+
+        for (const values of sets) {
+            const result = await this.runOne(sql, values, resource);
+            if (Array.isArray(result) && result.length > 1) responses.push(...result);
+            else responses.push(result);
+        }
+        return responses.length === 1 ? responses[0] : responses;
+    }
 }
 
-module.exports = { Executor, normalizeParams, NULL_SENTINEL };
+module.exports = { Executor, normalizeParams, normalizeNamedPlaceholders, NULL_SENTINEL };

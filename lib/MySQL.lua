@@ -1,105 +1,154 @@
--- '@qbsql/lib/MySQL.lua' -- the mysql-async / oxmysql `MySQL` global.
---
--- A consumer written against mysql-async or oxmysql's Lua wrapper includes this
--- with `shared_script '@qbsql/lib/MySQL.lua'` (or, for zero-touch drop-in, via
--- the stubs/ folders that forward here). It builds the `MySQL` global in that
--- consumer's own VM, backed by exports.qbsql.
---
--- NOTE ON ATTRIBUTION: because this file runs in the CONSUMER's VM,
--- GetCurrentResourceName() here already IS the real caller -- no
--- GetInvokingResource() dance is needed (unlike the compat/oxmysql.lua shim,
--- which runs in qbsql's VM and must capture the invoker per-call).
+-- oxmysql/mysql-async compatible MySQL global for consumer resources.
+-- This file runs inside the consumer VM, so resource attribution is explicit
+-- and every callback/promise is created in the same Lua runtime as its caller.
 
-MySQL = MySQL or {}
-
+local promise = promise
+local Await = Citizen.Await
 local resourceName = GetCurrentResourceName()
 
-local function call(jsName, query, params, cb)
-    exports.qbsql[jsName](exports.qbsql, query, params or {}, cb, resourceName)
+local options = { return_callback_errors = false }
+for i = 1, GetNumResourceMetadata(resourceName, 'mysql_option') do
+    local option = GetResourceMetadata(resourceName, 'mysql_option', i - 1)
+    options[option] = true
 end
 
-local function sync(jsName, query, params)
+local function isCallable(value)
+    if type(value) == 'function' then return true end
+    if type(value) ~= 'table' then return false end
+    if rawget(value, '__cfx_functionReference') then return true end
+    local mt = getmetatable(value)
+    return mt ~= nil and mt.__call ~= nil
+end
+
+local queryStore = {}
+
+local function safeArgs(query, parameters, cb, transaction)
+    local queryType = type(query)
+    if queryType == 'number' then
+        query = queryStore[query]
+        assert(query, 'First argument received invalid query store reference')
+    elseif transaction then
+        if queryType ~= 'table' then
+            error(("First argument expected table, received '%s'"):format(queryType))
+        end
+    elseif queryType ~= 'string' then
+        error(("First argument expected string, received '%s'"):format(queryType))
+    end
+
+    if parameters ~= nil then
+        local parameterType = type(parameters)
+        if parameterType ~= 'table' and not isCallable(parameters) then
+            error(("Second argument expected table or function, received '%s'"):format(parameterType))
+        end
+        if isCallable(parameters) then cb, parameters = parameters, nil end
+    end
+
+    if cb ~= nil and not isCallable(cb) then
+        error(("Third argument expected function, received '%s'"):format(type(cb)))
+    end
+    return query, parameters, cb
+end
+
+local function call(method, query, parameters, cb)
+    exports.qbsql[method](exports.qbsql, query, parameters or {}, function(result, err)
+        if not cb then return end
+        if options.return_callback_errors then cb(result, err) else cb(result) end
+    end, resourceName)
+end
+
+local function await(method, query, parameters)
     local p = promise.new()
-    call(jsName, query, params, function(result, err)
-        if err then p:reject(err) else p:resolve(result) end
-    end)
-    local ok, res = pcall(Citizen.Await, p)
-    if not ok then return nil end
-    return res
+    exports.qbsql[method](exports.qbsql, query, parameters or {}, function(result, err)
+        if err then return p:reject(err) end
+        p:resolve(result)
+    end, resourceName)
+    return Await(p)
 end
 
--- MySQL.ready(cb) -- run cb once the pool is up.
-function MySQL.ready(cb)
-    Citizen.CreateThread(function()
-        while not exports.qbsql:isReady() do Wait(50) end
-        if cb then cb() end
-    end)
-end
-
--- Async table (callback-style).
-MySQL.Async = {
-    fetchAll    = function(q, p, cb) call('query', q, p, cb) end,
-    fetchScalar = function(q, p, cb) call('scalar', q, p, cb) end,
-    fetchSingle = function(q, p, cb) call('single', q, p, cb) end,
-    execute     = function(q, p, cb) call('update', q, p, cb) end,
-    insert      = function(q, p, cb) call('insert', q, p, cb) end,
-    store       = function(q, cb) local h = exports.qbsql:store(q); if cb then cb(h) end end,
-    transaction = function(qs, p, cb)
-        if type(p) == 'function' then cb, p = p, nil end
-        exports.qbsql:transaction(qs, p, cb, resourceName)
-    end,
-}
-
--- Sync table (blocking).
-MySQL.Sync = {
-    fetchAll    = function(q, p) return sync('query', q, p) end,
-    fetchScalar = function(q, p) return sync('scalar', q, p) end,
-    fetchSingle = function(q, p) return sync('single', q, p) end,
-    execute     = function(q, p) return sync('update', q, p) end,
-    insert      = function(q, p) return sync('insert', q, p) end,
-    store       = function(q) return exports.qbsql:store(q) end,
-    transaction = function(qs, p)
-        local pr = promise.new()
-        exports.qbsql:transaction(qs, p, function(result, err)
-            if err then pr:reject(err) else pr:resolve(result) end
-        end, resourceName)
-        local ok, res = pcall(Citizen.Await, pr)
-        if not ok then return false end
-        return res
-    end,
-}
-
--- oxmysql-era MySQL.query / MySQL.scalar / ... with a `.await` sub-field, plus
--- direct callable form. `MySQL.query(sql, params, cb)` OR `MySQL.query.await(sql, params)`.
-local function makeDual(jsName)
-    return setmetatable({
-        await = function(q, p) return sync(jsName, q, p) end,
-    }, {
-        __call = function(_, q, p, cb) call(jsName, q, p, cb) end,
-    })
-end
-
-MySQL.query       = makeDual('query')
-MySQL.scalar      = makeDual('scalar')
-MySQL.single      = makeDual('single')
-MySQL.insert      = makeDual('insert')
-MySQL.update      = makeDual('update')
-MySQL.prepare     = makeDual('prepare')
-MySQL.rawExecute  = makeDual('execute')
-
-MySQL.transaction = setmetatable({
-    await = function(qs, p)
-        local pr = promise.new()
-        exports.qbsql:transaction(qs, p, function(result, err)
-            if err then pr:reject(err) else pr:resolve(result) end
-        end, resourceName)
-        local ok, res = pcall(Citizen.Await, pr)
-        if not ok then return false end
-        return res
-    end,
-}, {
-    __call = function(_, qs, p, cb)
-        if type(p) == 'function' then cb, p = p, nil end
-        exports.qbsql:transaction(qs, p, cb, resourceName)
+local MySQL = setmetatable(MySQL or {}, {
+    __index = function(_, index)
+        return function(...)
+            return exports.qbsql[index](exports.qbsql, ...)
+        end
     end,
 })
+
+local methodMt = {
+    __call = function(self, query, parameters, cb)
+        query, parameters, cb = safeArgs(query, parameters, cb, self.method == 'transaction')
+        if self.method == 'transaction' then
+            exports.qbsql:transaction(query, parameters or {}, function(result, err)
+                if cb then
+                    if options.return_callback_errors then cb(result, err) else cb(result) end
+                end
+            end, resourceName)
+            return
+        end
+        return call(self.method, query, parameters, cb)
+    end,
+}
+
+for _, method in ipairs({
+    'scalar', 'single', 'query', 'insert', 'update', 'prepare', 'transaction', 'rawExecute',
+}) do
+    MySQL[method] = setmetatable({
+        method = method,
+        await = function(query, parameters)
+            query, parameters = safeArgs(query, parameters, nil, method == 'transaction')
+            return await(method, query, parameters)
+        end,
+    }, methodMt)
+end
+
+local aliases = {
+    fetchAll = 'query',
+    fetchScalar = 'scalar',
+    fetchSingle = 'single',
+    insert = 'insert',
+    execute = 'update',
+    transaction = 'transaction',
+    prepare = 'prepare',
+}
+
+local aliasMt = {
+    __index = function(self, key)
+        local methodName = aliases[key]
+        if methodName then
+            local method = MySQL[methodName]
+            MySQL.Async[key] = method
+            MySQL.Sync[key] = method.await
+            aliases[key] = nil
+            return self[key]
+        end
+    end,
+}
+
+local function addStore(query, cb)
+    assert(type(query) == 'string', 'The SQL Query must be a string')
+    local handle = #queryStore + 1
+    queryStore[handle] = query
+    if cb then cb(handle) end
+    return handle
+end
+
+MySQL.Sync = setmetatable({ store = addStore }, aliasMt)
+MySQL.Async = setmetatable({ store = addStore }, aliasMt)
+
+local function onReady(cb)
+    exports.qbsql:awaitConnection()
+    if cb then cb() end
+    return true
+end
+
+MySQL.ready = setmetatable({ await = onReady }, {
+    __call = function(_, cb)
+        Citizen.CreateThreadNow(function() onReady(cb) end)
+    end,
+})
+
+function MySQL.startTransaction(cb)
+    assert(isCallable(cb), 'startTransaction requires a callback')
+    return exports.qbsql:startTransaction(cb, resourceName)
+end
+
+_ENV.MySQL = MySQL

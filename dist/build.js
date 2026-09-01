@@ -20975,6 +20975,45 @@ var require_execute3 = __commonJS({
       return Array.from(arr, (v) => v === void 0 || v === NULL_SENTINEL ? null : v);
     }
     __name(normalizeParams, "normalizeParams");
+    function normalizeNamedPlaceholders(sql, params) {
+      if (!params || Array.isArray(params) || typeof params !== "object") {
+        return { sql, params };
+      }
+      let out = sql;
+      if (sql.includes("@")) {
+        out = "";
+        let state = "code";
+        for (let i = 0; i < sql.length; i++) {
+          let c = sql[i];
+          const next = sql[i + 1];
+          if (state === "code") {
+            if (c === "'") state = "single";
+            else if (c === '"') state = "double";
+            else if (c === "`") state = "backtick";
+            else if (c === "-" && next === "-") state = "line";
+            else if (c === "#") state = "line";
+            else if (c === "/" && next === "*") state = "block";
+            else if (c === "@" && sql[i - 1] !== "@" && /[A-Za-z_]/.test(next || "")) c = ":";
+          } else if (state === "single" && c === "'" && sql[i - 1] !== "\\") state = "code";
+          else if (state === "double" && c === '"' && sql[i - 1] !== "\\") state = "code";
+          else if (state === "backtick" && c === "`") state = "code";
+          else if (state === "line" && (c === "\n" || c === "\r")) state = "code";
+          else if (state === "block" && c === "*" && next === "/") {
+            out += "*/";
+            i++;
+            state = "code";
+            continue;
+          }
+          out += c;
+        }
+      }
+      const normalized = { ...params };
+      for (const [key, value] of Object.entries(params)) {
+        if (key[0] === "@" || key[0] === ":") normalized[key.slice(1)] = value;
+      }
+      return { sql: out, params: normalized };
+    }
+    __name(normalizeNamedPlaceholders, "normalizeNamedPlaceholders");
     var _Executor = class _Executor {
       constructor(pools, statements, stats) {
         this.pools = pools;
@@ -20992,8 +21031,12 @@ var require_execute3 = __commonJS({
         }
         return this.pools.write;
       }
-      // The one true executor. Returns the raw mysql2 [rows|result, fields].
-      async runOne(sql, params, resource) {
+      // The one true executor. Returns mysql2's raw [rows|result, fields] pair.
+      // Keeping the pair until the final shape adapter is important for
+      // oxmysql.rawExecute, whose public contract deliberately exposes the raw
+      // response rather than parseResponse's query/single/scalar projections.
+      async runRaw(sql, params, resource) {
+        ({ sql, params } = normalizeNamedPlaceholders(sql, params));
         params = normalizeParams(params);
         const pool = this._poolFor(sql);
         const started = process.hrtime.bigint();
@@ -21020,7 +21063,7 @@ var require_execute3 = __commonJS({
           }
           const rows = result[0];
           rowCount = Array.isArray(rows) ? rows.length : 0;
-          return rows;
+          return result;
         } catch (err) {
           errored = true;
           throw err;
@@ -21029,9 +21072,13 @@ var require_execute3 = __commonJS({
           this.stats.record(sql, ms, rowCount, errored, resource);
         }
       }
+      async runOne(sql, params, resource) {
+        const result = await this.runRaw(sql, params, resource);
+        return result[0];
+      }
       async query(sql, params, resource) {
         const rows = await this.runOne(sql, params, resource);
-        return Array.isArray(rows) ? rows : [];
+        return rows ?? null;
       }
       async single(sql, params, resource) {
         const rows = await this.runOne(sql, params, resource);
@@ -21086,10 +21133,26 @@ var require_execute3 = __commonJS({
         }
         return responses.length === 1 ? responses[0] : responses;
       }
+      // oxmysql.rawExecute is prepare without response unpacking. oxmysql's
+      // connection wrapper has already removed mysql2's fields metadata by this
+      // point, so expose result values (rows/ResultSetHeader), not our internal
+      // [result, fields] transport pair. Multiple row/result sets are flattened
+      // the same way upstream appends them to its response array.
+      async rawExecute(sql, params, resource) {
+        const normal = normalizeParams(params);
+        const sets = Array.isArray(normal) && normal.length > 0 && normal.every(Array.isArray) ? normal.map(normalizeParams) : [normal];
+        const responses = [];
+        for (const values of sets) {
+          const result = await this.runOne(sql, values, resource);
+          if (Array.isArray(result) && result.length > 1) responses.push(...result);
+          else responses.push(result);
+        }
+        return responses.length === 1 ? responses[0] : responses;
+      }
     };
     __name(_Executor, "Executor");
     var Executor2 = _Executor;
-    module2.exports = { Executor: Executor2, normalizeParams, NULL_SENTINEL };
+    module2.exports = { Executor: Executor2, normalizeParams, normalizeNamedPlaceholders, NULL_SENTINEL };
   }
 });
 
@@ -21461,7 +21524,7 @@ var require_queue = __commonJS({
 var require_transaction = __commonJS({
   "server/js/transaction.js"(exports2, module2) {
     "use strict";
-    var { normalizeParams } = require_execute3();
+    var { normalizeParams, normalizeNamedPlaceholders } = require_execute3();
     var _TransactionRunner = class _TransactionRunner {
       constructor(pools) {
         this.pools = pools;
@@ -21476,20 +21539,38 @@ var require_transaction = __commonJS({
         if (typeof queries === "string") {
           const sql = queries;
           const paramSets = Array.isArray(maybeParams) ? maybeParams : [maybeParams || []];
-          return paramSets.map((params) => ({ sql, params: normalizeParams(params) }));
+          return paramSets.map((params) => {
+            const normalized = normalizeNamedPlaceholders(sql, params);
+            return { sql: normalized.sql, params: normalizeParams(normalized.params) };
+          });
         }
-        return queries.map((q) => ({
-          sql: q.query || q.sql,
-          params: normalizeParams(q.values || q.params)
-        }));
+        if (!Array.isArray(queries)) {
+          throw new TypeError(`Transaction queries must be array, received '${typeof queries}'.`);
+        }
+        return queries.map((q) => {
+          let sql, params;
+          if (Array.isArray(q)) {
+            sql = q[0];
+            params = q[1];
+          } else if (typeof q === "string") {
+            sql = q;
+            params = maybeParams;
+          } else if (q && typeof q === "object") {
+            sql = q.query || q.sql;
+            params = q.parameters ?? q.values ?? q.params ?? maybeParams;
+          }
+          if (typeof sql !== "string") throw new TypeError("Transaction query must be a string");
+          const normalized = normalizeNamedPlaceholders(sql, params);
+          return { sql: normalized.sql, params: normalizeParams(normalized.params) };
+        });
       }
-      async transaction(queries, maybeParams) {
+      async transaction(queries, maybeParams, resource) {
         const statements = this._normalise(queries, maybeParams);
         const conn = await this.pools.write.getConnection();
         try {
           await conn.beginTransaction();
           for (const st of statements) {
-            await conn.execute(st.sql, st.params);
+            await conn.query(st.sql, st.params);
           }
           await conn.commit();
           return true;
@@ -21498,8 +21579,58 @@ var require_transaction = __commonJS({
             await conn.rollback();
           } catch (_) {
           }
-          throw err;
+          console.error(`qbsql transaction rolled back: ${err.message}`);
+          if (typeof globalThis.TriggerEvent === "function") {
+            globalThis.TriggerEvent("oxmysql:transaction-error", {
+              query: statements.map((st) => `${st.sql} ${JSON.stringify(st.params)}`).join("\n"),
+              parameters: maybeParams,
+              message: err.message,
+              err,
+              resource: resource || "unknown"
+            });
+          }
+          return false;
         } finally {
+          conn.release();
+        }
+      }
+      // Experimental oxmysql startTransaction contract. The callback receives a
+      // query function pinned to this connection and decides whether to commit
+      // (anything except explicit false) or roll back (false). A 30s deadline
+      // matches oxmysql and prevents a leaked callback from pinning a pool slot.
+      async startTransaction(callback) {
+        if (typeof callback !== "function") throw new TypeError("startTransaction requires a callback");
+        const conn = await this.pools.write.getConnection();
+        let closed = false;
+        const timeout = setTimeout(() => {
+          closed = true;
+        }, 3e4);
+        try {
+          await conn.beginTransaction();
+          const query = /* @__PURE__ */ __name(async (sql, params = []) => {
+            if (closed) throw new Error("Connection used by transaction timed out after 30 seconds.");
+            const normalized = normalizeNamedPlaceholders(sql, params);
+            const [result] = await conn.query(normalized.sql, normalizeParams(normalized.params));
+            return result;
+          }, "query");
+          const shouldCommit = await callback(query);
+          if (closed) throw new Error("Transaction has timed out after 30 seconds.");
+          if (shouldCommit === false) {
+            await conn.rollback();
+            return false;
+          }
+          await conn.commit();
+          return true;
+        } catch (err) {
+          try {
+            await conn.rollback();
+          } catch (_) {
+          }
+          console.error(`qbsql startTransaction failed: ${err.message}`);
+          return false;
+        } finally {
+          clearTimeout(timeout);
+          closed = true;
           conn.release();
         }
       }
@@ -21672,7 +21803,7 @@ var require_exports = __commonJS({
     function register2(api2, exports3) {
       if (typeof exports3 !== "function") throw new Error("qbsql/exports: registrar not supplied");
       function dataExport(name, impl) {
-        exports3(name, function(...args) {
+        const exported = /* @__PURE__ */ __name(function(...args) {
           let cb = null, resource = null;
           while (args.length) {
             const last = args[args.length - 1];
@@ -21703,9 +21834,20 @@ var require_exports = __commonJS({
             });
             return p;
           }
-        });
+        }, "exported");
+        exports3(name, exported);
+        return exported;
       }
       __name(dataExport, "dataExport");
+      function provideForeign(resource, name, fn) {
+        if (typeof globalThis.on !== "function") return;
+        globalThis.on(`__cfx_export_${resource}_${name}`, (setCb) => setCb(fn));
+      }
+      __name(provideForeign, "provideForeign");
+      function oxAsync(name, exported) {
+        provideForeign("oxmysql", `${name}_async`, (...args) => exported(...args));
+      }
+      __name(oxAsync, "oxAsync");
       function implArity(impl) {
         return Math.max(0, impl.length - 1);
       }
@@ -21718,29 +21860,60 @@ var require_exports = __commonJS({
         api2.ready().then(impl).catch((err) => log2.error("exports", `${name} failed before qbsql became ready: ${err.message}`));
       }
       __name(enqueueWhenReady, "enqueueWhenReady");
-      exports3("isReady", () => api2.isReady());
+      const isReady = /* @__PURE__ */ __name(() => api2.isReady(), "isReady");
+      exports3("isReady", isReady);
       exports3("version", () => api2.version());
+      const awaitConnection = /* @__PURE__ */ __name(function() {
+        return Promise.resolve().then(() => api2.ready()).then(() => true);
+      }, "awaitConnection");
+      exports3("awaitConnection", awaitConnection);
+      provideForeign("oxmysql", "isReady_async", () => Promise.resolve(isReady()));
+      provideForeign("oxmysql", "awaitConnection_async", awaitConnection);
       exports3("awaitReady", function(cb) {
         api2.ready().then(() => reply("awaitReady", cb, true, null)).catch((e) => reply("awaitReady", cb, false, String(e.message)));
       });
-      dataExport("query", (sql, params, resource) => api2.executor.query(sql, params, resource));
-      dataExport("single", (sql, params, resource) => api2.executor.single(sql, params, resource));
-      dataExport("scalar", (sql, params, resource) => api2.executor.scalar(sql, params, resource));
-      dataExport("execute", (sql, params, resource) => api2.executor.execute(sql, params, resource));
-      dataExport("insert", (sql, params, resource) => api2.executor.insert(sql, params, resource));
-      dataExport("update", (sql, params, resource) => api2.executor.update(sql, params, resource));
-      dataExport("prepare", (sql, params, resource) => api2.executor.prepare(sql, params, resource));
-      dataExport("transaction", (queries, params, resource) => api2.txn.transaction(queries, params));
+      const query = dataExport("query", (sql, params, resource) => api2.executor.query(sql, params, resource));
+      const single = dataExport("single", (sql, params, resource) => api2.executor.single(sql, params, resource));
+      const scalar = dataExport("scalar", (sql, params, resource) => api2.executor.scalar(sql, params, resource));
+      const execute = dataExport("execute", (sql, params, resource) => api2.executor.execute(sql, params, resource));
+      const insert = dataExport("insert", (sql, params, resource) => api2.executor.insert(sql, params, resource));
+      const update = dataExport("update", (sql, params, resource) => api2.executor.update(sql, params, resource));
+      const prepare = dataExport("prepare", (sql, params, resource) => api2.executor.prepare(sql, params, resource));
+      oxAsync("query", query);
+      oxAsync("fetch", query);
+      oxAsync("execute", query);
+      oxAsync("single", single);
+      oxAsync("scalar", scalar);
+      oxAsync("insert", insert);
+      oxAsync("update", update);
+      oxAsync("prepare", prepare);
+      const transaction = dataExport("transaction", (queries, params, resource) => api2.txn.transaction(queries, params, resource));
       dataExport("batch", (queries, params, resource) => api2.txn.batch(queries, params));
-      exports3("store", (sql) => api2.store.put(sql));
-      dataExport("rawExecute", (handle, params, resource) => {
-        const sql = api2.store.get(handle);
-        if (!sql) {
+      oxAsync("transaction", transaction);
+      const store = /* @__PURE__ */ __name((sql, cb) => {
+        const handle = api2.store.put(sql);
+        reply("store", cb, handle);
+        return handle;
+      }, "store");
+      exports3("store", store);
+      provideForeign("oxmysql", "store_async", (sql) => Promise.resolve(sql));
+      const rawExecute = dataExport("rawExecute", (handle, params, resource) => {
+        const sql = typeof handle === "number" ? api2.store.get(handle) : handle;
+        if (typeof sql !== "string") {
           log2.warn("exports", `rawExecute called with unknown store handle ${handle} -- did the resource restart?`);
           return Promise.resolve(null);
         }
-        return api2.executor.execute(sql, params, resource);
+        return api2.executor.rawExecute(sql, params, resource);
       });
+      oxAsync("rawExecute", rawExecute);
+      const startTransaction = /* @__PURE__ */ __name(function(callback, resource) {
+        const p = Promise.resolve().then(() => api2.ready()).then(() => api2.txn.startTransaction(callback, resource));
+        p.catch(() => {
+        });
+        return p;
+      }, "startTransaction");
+      exports3("startTransaction", startTransaction);
+      provideForeign("oxmysql", "startTransaction_async", startTransaction);
       exports3("enqueue", (table, key, row, opts) => {
         enqueueWhenReady("enqueue", () => api2.queue.enqueue(table, key, row, opts));
       });

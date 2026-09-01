@@ -106,16 +106,25 @@ coroutine required.
 
 ## oxmysql compat
 
-`exports.oxmysql:execute/query/scalar/single/insert/update/transaction/store/
-rawExecute/isReady` and every `*Sync` variant work unmodified. Slow queries are
-attributed to the calling resource, not to qbsql.
+The current oxmysql surface is available unmodified through the provided
+`oxmysql` identity: `query`, deprecated `execute`/`fetch`, `single`, `scalar`,
+`insert`, `update`, `prepare`, `transaction`, `rawExecute`, `store`, `isReady`,
+`awaitConnection`, and experimental `startTransaction`. Every `_async` promise
+export and every `*Sync` alias is registered too. Callback-as-second-argument,
+`@name`/`:name` binds, all supported transaction query shapes, rollback-to-
+`false`, and `oxmysql:transaction-error` are preserved. `execute`/`fetch` keep
+oxmysql's query-result semantics; `rawExecute` returns raw rows/result headers
+without mysql2 field metadata, and the oxmysql `store` export returns its SQL
+text unchanged exactly like upstream. Slow queries are attributed to the
+original calling resource, not to qbsql.
 
 ## mysql-async compat
 
-`shared_script '@qbsql/lib/MySQL.lua'` (or drop the `stubs/mysql-async` folder in
-for a zero-touch include) gives the `MySQL` global: `MySQL.ready`,
-`MySQL.Async.*`, `MySQL.Sync.*`, and `MySQL.query.await` / `.scalar.await` /
-`.single.await` / `.insert.await` / `.update.await` / `.transaction.await`.
+`shared_script '@oxmysql/lib/MySQL.lua'` works unchanged through the bundled
+`stubs/oxmysql` resource; `@qbsql/lib/MySQL.lua` is the direct equivalent. Both
+install the full current `MySQL` global: callable top-level methods with
+`.await`, lazy `MySQL.Async.*`/`MySQL.Sync.*` aliases, stored-query handles,
+`MySQL.ready`/`.ready.await`, and `MySQL.startTransaction`.
 
 ## Console commands (`command.qbsql` ace, or the server console)
 - `/qbsql ping` — SELECT VERSION() + round-trip time.

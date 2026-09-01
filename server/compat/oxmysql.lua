@@ -19,6 +19,14 @@ end
 -- warning prints once per resource rather than once per call.
 local warnedSync = {}
 
+local function isCallable(value)
+    if type(value) == 'function' then return true end
+    if type(value) ~= 'table' then return false end
+    if rawget(value, '__cfx_functionReference') then return true end
+    local mt = getmetatable(value)
+    return mt ~= nil and mt.__call ~= nil
+end
+
 local function warnSyncOnce(resource)
     if not (Config.compat.warnOnSync) or warnedSync[resource] then return end
     warnedSync[resource] = true
@@ -38,6 +46,7 @@ end
 -- wrapper's trailing-argument peeling relies on a stable argument count.
 local function asyncCall(jsName)
     return function(query, params, cb)
+        if isCallable(params) and cb == nil then cb, params = params, nil end
         local resource = GetInvokingResource() or GetCurrentResourceName()
         exports.qbsql[jsName](exports.qbsql, query, params or {}, cb, resource)
     end
@@ -98,19 +107,33 @@ local function guarded(fn)
     end
 end
 
--- store()/rawExecute() forward straight through; the JS store is in-memory and
--- warns on an unknown handle after a restart rather than silently no-op'ing.
-local function store(query)
-    return exports.qbsql:store(query)
+-- Current oxmysql's store compatibility export returns the SQL string itself;
+-- rawExecute accepts strings, so retain that exact observable contract. qbsql's
+-- own numeric store handles remain available through exports.qbsql:store.
+local function store(query, cb)
+    if isCallable(cb) then cb(query) end
+    return query
 end
 
 local function rawExecute(handle, params, cb)
+    if isCallable(params) and cb == nil then cb, params = params, nil end
     local resource = GetInvokingResource() or GetCurrentResourceName()
     return exports.qbsql:rawExecute(handle, params or {}, cb, resource)
 end
 
 local function isReady()
     return exports.qbsql:isReady()
+end
+
+local function awaitConnection()
+    while not exports.qbsql:isReady() do Wait(0) end
+    return true
+end
+
+local function startTransaction(callback)
+    assert(isCallable(callback), 'startTransaction requires a callback')
+    local resource = GetInvokingResource() or GetCurrentResourceName()
+    return exports.qbsql:startTransaction(callback, resource)
 end
 
 -- These are the two exports oxmysql consumers commonly use while booting:
@@ -121,9 +144,13 @@ local query = guarded(asyncCall('query'))
 
 -- Registration table. Async names take (query, params, cb); Sync names block
 -- and return. query/isReady and transaction/rawExecute/store are special-cased.
-local asyncNames = { 'execute', 'scalar', 'single', 'insert', 'update', 'prepare' }
+local asyncNames = { 'scalar', 'single', 'insert', 'update', 'prepare' }
 local registrations = {
     querySync = syncCall('query'),
+    execute = query,
+    executeSync = syncCall('query'),
+    fetch = query,
+    fetchSync = syncCall('query'),
 }
 
 for _, name in ipairs(asyncNames) do
@@ -133,8 +160,9 @@ for _, name in ipairs(asyncNames) do
 end
 
 registrations.transaction = function(queries, params, cb)
+    if isCallable(params) and cb == nil then cb, params = params, nil end
     local resource = GetInvokingResource() or GetCurrentResourceName()
-    exports.qbsql:transaction(queries, params, cb, resource)
+    exports.qbsql:transaction(queries, params or {}, cb, resource)
 end
 registrations.transactionSync = function(queries, params)
     local resource = GetInvokingResource() or GetCurrentResourceName()
@@ -159,6 +187,12 @@ registrations.rawExecuteSync = function(handle, params)
 end
 registrations.store = store
 registrations.prepareSync = registrations.prepareSync or syncCall('prepare')
+registrations.awaitConnection = awaitConnection
+registrations.awaitConnectionSync = awaitConnection
+registrations.isReadySync = isReady
+registrations.startTransaction = startTransaction
+registrations.startTransactionSync = startTransaction
+registrations.storeSync = store
 
 provideExport('oxmysql', 'query', query)
 provideExport('oxmysql', 'isReady', isReady)
