@@ -18,6 +18,16 @@
 const batch = require('./batch');
 const log = require('./logger');
 
+// Queue writes bypass Executor.runOne(), where normal ad-hoc queries turn
+// sparse Lua arrays and the public NULL sentinel into real JS nulls. Do that
+// conversion here too: otherwise a missing value in an upsert reaches mysql2
+// as `undefined` and retries can never succeed.
+const NULL_SENTINEL = '\u0000qbsql:null\u0000';
+function normalizeWriteParams(params) {
+    return Array.from(params, (value) =>
+        value === undefined || value === NULL_SENTINEL ? null : value);
+}
+
 // Serialise a PK (which may be composite -- an array) to a Map key.
 function pkKey(pk) {
     return Array.isArray(pk) ? pk.map((v) => '\x1f' + v).join('') : String(pk);
@@ -235,7 +245,7 @@ class WriteQueue {
     async _writeWithRetry(table, sql, params, chunk, mode, columns, attempt, reMerged) {
         attempt = attempt || 0;
         try {
-            await this.pools.write.execute(sql, params);
+            await this.pools.write.execute(sql, normalizeWriteParams(params));
             // A prior failed attempt (below) may have re-merged some of these
             // rows' stale, pre-retry values back into the live pending set as
             // a hedge. The direct retry we just ran used the ORIGINAL stale

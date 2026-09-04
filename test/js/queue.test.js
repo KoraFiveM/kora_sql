@@ -111,6 +111,19 @@ test('a transient write failure requeues and eventually succeeds', async () => {
     assert.deepEqual(executed[0].params, ['ABC', 'm']);
 });
 
+test('queued upserts turn missing values and the public NULL sentinel into SQL NULL', async () => {
+    const { executed, pools } = makeFakePools();
+    const q = new WriteQueue(null, pools, new Stats(150, 50), CFG);
+
+    q.enqueue('qbmultijob_jobs', 'citizenid', {
+        pk: 'ABC',
+        cols: { jobs: undefined, note: '\u0000qbsql:null\u0000' },
+    }, {});
+    await q.flush();
+
+    assert.deepEqual(executed[0].params, ['ABC', null, null]);
+});
+
 test('a terminal write failure is dead-lettered and rejects the flush', async () => {
     const { executed, pools } = makeFakePools({ failFirst: 6 });
     const stats = new Stats(150, 50);

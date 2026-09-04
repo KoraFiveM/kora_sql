@@ -21277,6 +21277,11 @@ var require_queue = __commonJS({
     "use strict";
     var batch = require_batch();
     var log2 = require_logger();
+    var NULL_SENTINEL = "\0qbsql:null\0";
+    function normalizeWriteParams(params) {
+      return Array.from(params, (value) => value === void 0 || value === NULL_SENTINEL ? null : value);
+    }
+    __name(normalizeWriteParams, "normalizeWriteParams");
     function pkKey(pk) {
       return Array.isArray(pk) ? pk.map((v) => "" + v).join("") : String(pk);
     }
@@ -21459,7 +21464,7 @@ var require_queue = __commonJS({
       async _writeWithRetry(table, sql, params, chunk, mode, columns, attempt, reMerged) {
         attempt = attempt || 0;
         try {
-          await this.pools.write.execute(sql, params);
+          await this.pools.write.execute(sql, normalizeWriteParams(params));
           this._clearReMerged(table, reMerged, mode);
         } catch (err) {
           this.stats.queue.retries++;
