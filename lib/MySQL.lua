@@ -142,7 +142,7 @@ end
 
 MySQL.ready = setmetatable({ await = onReady }, {
     __call = function(_, cb)
-        Citizen.CreateThreadNow(function() onReady(cb) end)
+        CreateThreadNow(function() onReady(cb) end)
     end,
 })
 

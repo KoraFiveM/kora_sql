@@ -18,7 +18,7 @@ RegisterCommand('qbsql', function(source, args)
     local sub = (args[1] or 'stats'):lower()
 
     if sub == 'ping' then
-        Citizen.CreateThread(function()
+        CreateThread(function()
             if not Ready.await(5000) then print('^1[qbsql]^7 not ready') return end
             local started = GetGameTimer()
             local p = promise.new()
@@ -67,7 +67,7 @@ RegisterCommand('qbsql', function(source, args)
 
     elseif sub == 'bench' then
         local n = tonumber(args[2]) or 500
-        Citizen.CreateThread(function() runBench(n) end)
+        CreateThread(function() runBench(n) end)
 
     else
         print('^3[qbsql]^7 usage: /qbsql ping | stats | slow [n] | queue | flush | bench [n]')
