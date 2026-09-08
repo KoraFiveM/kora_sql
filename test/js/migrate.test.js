@@ -146,6 +146,22 @@ test('a non-idempotent DDL migration is rejected before execution', async () => 
     );
 });
 
+test('an atomic index replacement using IF EXISTS/IF NOT EXISTS is accepted', async () => {
+    const { pools, executed } = fakePools();
+    await new Migrator(pools).migrate('qbcore', [
+        {
+            version: 8,
+            name: 'active_character_slots',
+            sql: 'ALTER TABLE `players` DROP INDEX IF EXISTS `old_slot`, ADD UNIQUE INDEX IF NOT EXISTS `new_slot` (`license`,`active_cid`)',
+            checksum: 'active-slots',
+        },
+    ]);
+    assert.ok(executed.some((entry) => {
+        const sql = typeof entry.sql === 'object' ? entry.sql.sql : entry.sql;
+        return sql.includes('DROP INDEX IF EXISTS `old_slot`');
+    }));
+});
+
 test('an already-applied migration with a changed checksum is a hard abort', async () => {
     const { pools } = fakePools({ applied: [{ version: 1, checksum: 'ondisk' }] });
     await assert.rejects(

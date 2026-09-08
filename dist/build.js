@@ -21731,8 +21731,10 @@ CREATE TABLE IF NOT EXISTS \`qbsql_deadletter\` (
               const withoutComments = stmt.replace(/^\s*(?:--[^\n]*\n\s*)*/g, "");
               const safeCreate = /^CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\b/i.test(withoutComments);
               const allAdds = withoutComments.match(/\bADD\b/gi) || [];
-              const safeAdds = withoutComments.match(/\bADD\s+(?:COLUMN|INDEX)\s+IF\s+NOT\s+EXISTS\b/gi) || [];
-              const safeAlter = /^ALTER\s+TABLE\b/i.test(withoutComments) && allAdds.length > 0 && allAdds.length === safeAdds.length;
+              const safeAdds = withoutComments.match(/\bADD\s+(?:COLUMN|(?:UNIQUE\s+)?INDEX)\s+IF\s+NOT\s+EXISTS\b/gi) || [];
+              const allDrops = withoutComments.match(/\bDROP\b/gi) || [];
+              const safeDrops = withoutComments.match(/\bDROP\s+INDEX\s+IF\s+EXISTS\b/gi) || [];
+              const safeAlter = /^ALTER\s+TABLE\b/i.test(withoutComments) && allAdds.length > 0 && allAdds.length === safeAdds.length && allDrops.length === safeDrops.length;
               if (!safeCreate && !safeAlter) {
                 throw new Error("DDL migrations must be retry-safe (CREATE TABLE IF NOT EXISTS or ALTER ADD ... IF NOT EXISTS)");
               }
