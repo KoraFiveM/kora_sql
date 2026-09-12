@@ -100,6 +100,12 @@ Immediate awaited batched upsert (enqueueMany + flush in one call).
 `migrations` = `{ {version=, name=, sql=, checksum=}, ... }`. A checksum mismatch
 on an already-applied version aborts. See qbcore's `sql/` for the pattern.
 
+### QB.sql.migrateFiles(resource, migrations, checksumFn?) -> boolean, errString
+Loads `{version=, name=, file=}` entries with `LoadResourceFile`, calculates
+their checksums, and forwards them to `migrate`. `checksumFn` defaults to
+`QB.util.fnv1a`; pass the resource's historical checksum function when an
+existing migration used another format.
+
 ### Callback variants
 `QB.sql.queryAsync(sql, params, cb)` and friends — `cb(result, errString)`, no
 coroutine required.

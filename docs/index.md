@@ -157,6 +157,7 @@ QB.sql.transaction(statements)                -- same, wrapped in BEGIN/COMMIT, 
 QB.sql.transaction(sql, paramSets)            -- oxmysql's "one query, many param sets" form
 QB.sql.upsert(table, conflictKey, rows, opts) -- immediate awaited batched upsert (enqueueMany + flush in one call)
 QB.sql.migrate(resource, migrations)          -- { {version=, name=, sql=, checksum=}, ... }
+QB.sql.migrateFiles(resource, migrations, checksumFn?) -- loads {version=, name=, file=} definitions
 QB.sql.flush(table?) -> boolean, errString    -- yields until the table (or everything) has drained
 QB.sql.stats()                                -- query + queue counters (same data as `/qbsql stats`)
 QB.sql.NULL                                   -- sentinel for an explicit SQL NULL bind value
