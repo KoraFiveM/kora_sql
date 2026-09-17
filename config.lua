@@ -20,4 +20,19 @@ Config.sql = {
 
 -- Registers qbsql's Lua-side settings with qblib. Pool boot options remain
 -- server convars because the Node host cannot read this Lua table.
-Config = QB.config.adopt(Config)
+Config.compat.oxmysql = QB.config.boolean(Config.compat.oxmysql, { label = 'Support oxmysql scripts', advanced = false })
+Config.compat.mysqlAsync = QB.config.boolean(Config.compat.mysqlAsync, { label = 'Support mysql-async scripts', advanced = false })
+Config.compat.ghmattimysql = QB.config.boolean(Config.compat.ghmattimysql, { label = 'Support ghmattimysql scripts', advanced = false })
+Config.compat.installMySQLGlobal = QB.config.boolean(Config.compat.installMySQLGlobal, { label = 'Legacy MySQL global preference', advanced = true })
+Config.compat.warnOnSync = QB.config.boolean(Config.compat.warnOnSync, { label = 'Warn about blocking database calls', advanced = true })
+Config.sql.awaitTimeout = QB.config.integer(Config.sql.awaitTimeout, { label = 'Query wait preference (milliseconds)', advanced = true, min = 0 })
+Config.sql.readyTimeout = QB.config.integer(Config.sql.readyTimeout, { label = 'Database readiness wait preference (milliseconds)', advanced = true, min = 0 })
+Config = QB.config.adopt(Config, { descriptions = {
+    ['compat.oxmysql'] = 'Allow scripts using oxmysql database exports to use qbsql.',
+    ['compat.mysqlAsync'] = 'Allow scripts using mysql-async database exports to use qbsql.',
+    ['compat.ghmattimysql'] = 'Allow scripts using ghmattimysql database exports to use qbsql.',
+    ['compat.installMySQLGlobal'] = 'Retained compatibility preference. The current MySQL include installs its global without reading this setting.',
+    ['compat.warnOnSync'] = 'Log a warning once per calling resource when it uses an oxmysql blocking call.',
+    ['sql.awaitTimeout'] = 'Retained query timeout preference. The current database query helper does not read this setting.',
+    ['sql.readyTimeout'] = 'Readiness wait used by the SQL include in its calling resource. Editing qbsql here does not change other resources that have their own Config table.',
+} })
