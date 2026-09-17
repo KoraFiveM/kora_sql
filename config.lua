@@ -17,3 +17,7 @@ Config.sql = {
     awaitTimeout = 30000,      -- ms QB.sql.* waits for a query before rejecting
     readyTimeout = 60000,      -- ms QB.sql.ready() waits for the pool before giving up
 }
+
+-- Registers qbsql's Lua-side settings with qblib. Pool boot options remain
+-- server convars because the Node host cannot read this Lua table.
+Config = QB.config.adopt(Config)

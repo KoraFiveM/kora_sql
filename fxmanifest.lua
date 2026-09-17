@@ -7,6 +7,8 @@ author 'Jamie'
 version '1.0.0'
 description 'High-throughput MySQL driver for FiveM with write coalescing and oxmysql/mysql-async compatibility'
 
+dependency 'qblib'
+
 -- `provide` only satisfies ANOTHER resource's `dependency`/`dependencies`
 -- check. It does NOT make exports.oxmysql:query() resolve here -- that
 -- additionally requires registering the underlying __cfx_export_oxmysql_query
@@ -22,6 +24,7 @@ files {
 }
 
 shared_scripts {
+    '@qblib/init.lua',
     'config.lua'
 }
 
