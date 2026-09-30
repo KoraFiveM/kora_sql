@@ -171,6 +171,7 @@ class WriteQueue {
         const started = process.hrtime.bigint();
         let statements = 0;
         let rowsWritten = 0;
+        let firstError;
 
         try {
             // Group by signature = sorted column set.
@@ -202,14 +203,20 @@ class WriteQueue {
                             pad: this.cfg.padToBuckets && st.mode === 'assign',
                         }
                     );
-                    await this._writeWithRetry(table, sql, params, chunk, st.mode, g.columns);
-                    statements++;
-                    rowsWritten += rowCount;
+                    try {
+                        await this._writeWithRetry(table, sql, params, chunk, st.mode, g.columns);
+                        statements++;
+                        rowsWritten += rowCount;
+                    } catch (err) {
+                        // Other chunks are independent; do not discard their detached rows.
+                        if (!firstError) firstError = err;
+                    }
                 }
             }
 
             const ms = Number(process.hrtime.bigint() - started) / 1e6;
             this.stats.recordFlush(snapshotCount, rowsWritten, statements, ms);
+            if (firstError) throw firstError;
             log.debug('queue', `flushed ${table}: ${snapshotCount} rows -> ${statements} statements in ${ms.toFixed(1)}ms`);
         } finally {
             st.flushing = false;

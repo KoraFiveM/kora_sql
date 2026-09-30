@@ -21394,6 +21394,7 @@ var require_queue = __commonJS({
         const started = process.hrtime.bigint();
         let statements = 0;
         let rowsWritten = 0;
+        let firstError;
         try {
           const groups = /* @__PURE__ */ new Map();
           for (const entry of snapshot.values()) {
@@ -21425,13 +21426,18 @@ var require_queue = __commonJS({
                   pad: this.cfg.padToBuckets && st.mode === "assign"
                 }
               );
-              await this._writeWithRetry(table, sql, params, chunk, st.mode, g.columns);
-              statements++;
-              rowsWritten += rowCount;
+              try {
+                await this._writeWithRetry(table, sql, params, chunk, st.mode, g.columns);
+                statements++;
+                rowsWritten += rowCount;
+              } catch (err) {
+                if (!firstError) firstError = err;
+              }
             }
           }
           const ms = Number(process.hrtime.bigint() - started) / 1e6;
           this.stats.recordFlush(snapshotCount, rowsWritten, statements, ms);
+          if (firstError) throw firstError;
           log2.debug("queue", `flushed ${table}: ${snapshotCount} rows -> ${statements} statements in ${ms.toFixed(1)}ms`);
         } finally {
           st.flushing = false;

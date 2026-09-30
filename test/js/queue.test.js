@@ -17,7 +17,11 @@ function makeFakePools(opts) {
     const pool = {
         async execute(sql, params) {
             calls++;
+            if (opts.failDeadLetter && /qbsql_deadletter/.test(sql)) {
+                throw new Error('simulated dead-letter failure');
+            }
             if (opts.failFirst && calls <= opts.failFirst) {
+                if (opts.onFailure) opts.onFailure(calls);
                 const e = new Error('simulated write failure');
                 throw e;
             }
@@ -137,3 +141,55 @@ test('a terminal write failure is dead-lettered and rejects the flush', async ()
     assert.equal(stats.summary({}).queue.deadLettered, 1);
     assert.equal(q.depth().players.rows, 0, 'the stale retry hedge must not remain queued after dead-lettering');
 });
+
+for (const mode of ['assign', 'accumulate']) {
+    for (const writeMode of ['upsert', 'update']) {
+        for (const failDeadLetter of [false, true]) {
+            test(`failed ${mode}/${writeMode} chunk preserves later rows and newer writes (dead-letter failure: ${failDeadLetter})`, async (t) => {
+                const options = { mode, writeMode };
+                const { executed, pools } = makeFakePools({
+                    failFirst: 6,
+                    failDeadLetter,
+                    onFailure: (calls) => {
+                        if (calls === 2) q.enqueue('players', 'citizenid', { pk: 'BAD', cols: { money: 99 } }, options);
+                    },
+                });
+                const stats = new Stats(150, 50);
+                const q = new WriteQueue(null, pools, stats, {
+                    ...CFG, flushInterval: 60000, maxRowsPerStatement: 1,
+                });
+                t.after(() => clearTimeout(q.timer));
+                q.enqueueMany('players', 'citizenid', [
+                    { pk: 'BAD', cols: { money: 10 } },
+                    { pk: 'GOOD', cols: { money: 20 } },
+                    { pk: 'OTHER_SIGNATURE', cols: { money: 30, distance: 4 } },
+                ], options);
+                await assert.rejects(q.flush('players'), failDeadLetter ? /failed to dead-letter/ : /failed after 5 retries/);
+
+                const writes = () => executed.filter(({ sql }) => !/qbsql_deadletter/.test(sql));
+                assert.deepEqual(writes().map(({ params }) => params[0]), ['GOOD', 'OTHER_SIGNATURE'],
+                    'later chunks and column groups must still be written');
+                assert.equal(stats.queue.rowsWritten, 2, 'count only successful writes');
+                assert.equal(stats.queue.statementsIssued, 2);
+                assert.equal(stats.queue.deadLettered, failDeadLetter ? 0 : 1);
+                const recovery = executed.filter(({ sql }) => /qbsql_deadletter/.test(sql));
+                if (!failDeadLetter) {
+                    assert.equal(recovery.length, 1);
+                    assert.equal(recovery[0].params[1], 'BAD');
+                    assert.deepEqual(JSON.parse(recovery[0].params[2]), { money: 10 });
+                }
+
+                const remaining = failDeadLetter && mode === 'accumulate' ? 109 : 99;
+                assert.equal(q.pending.get('players').rows.get('BAD').cols.money, remaining,
+                    'retain the new assignment or delta without replaying a dead-lettered increment');
+                assert.equal(q.pendingRowCount, 1);
+                await q.flush('players');
+                assert.equal(writes().length, 3, 'healthy rows must not be resent in the next flush');
+                assert.equal(writes()[2].params[0], 'BAD');
+                assert.equal(writes()[2].params[1], remaining);
+                assert.equal(q.pendingRowCount, 0);
+                assert.equal(q.depth().players.rows, 0);
+            });
+        }
+    }
+}
