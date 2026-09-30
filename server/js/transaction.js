@@ -95,31 +95,58 @@ class TransactionRunner {
 
         const conn = await this.pools.write.getConnection();
         let closed = false;
-        const timeout = setTimeout(() => { closed = true; }, 30000);
+        let discard = false;
+        let rollbackAttempted = false;
+        let timeout;
+        const deadline = new Promise((_, reject) => {
+            timeout = setTimeout(() => {
+                closed = true;
+                discard = true;
+                reject(new Error('Transaction has timed out after 30 seconds.'));
+            }, 30000);
+        });
         try {
-            await conn.beginTransaction();
+            await Promise.race([conn.beginTransaction(), deadline]);
+            if (closed) throw new Error('Transaction has timed out after 30 seconds.');
             const query = async (sql, params = []) => {
                 if (closed) throw new Error('Connection used by transaction timed out after 30 seconds.');
                 const normalized = normalizeNamedPlaceholders(sql, params);
-                const [result] = await conn.query(normalized.sql, normalizeParams(normalized.params));
+                const [result] = await Promise.race([
+                    conn.query(normalized.sql, normalizeParams(normalized.params)), deadline,
+                ]);
+                if (closed) throw new Error('Connection used by transaction timed out after 30 seconds.');
                 return result;
             };
-            const shouldCommit = await callback(query);
+            const shouldCommit = await Promise.race([callback(query), deadline]);
             if (closed) throw new Error('Transaction has timed out after 30 seconds.');
+            closed = true;
             if (shouldCommit === false) {
-                await conn.rollback();
+                rollbackAttempted = true;
+                await Promise.race([conn.rollback(), deadline]);
                 return false;
             }
-            await conn.commit();
+            await Promise.race([conn.commit(), deadline]);
             return true;
         } catch (err) {
-            try { await conn.rollback(); } catch (_) { /* connection may be dead */ }
+            closed = true;
+            if (!discard && !rollbackAttempted) {
+                rollbackAttempted = true;
+                try {
+                    await Promise.race([conn.rollback(), deadline]);
+                } catch (_) {
+                    discard = true;
+                }
+            } else {
+                discard = true;
+            }
             console.error(`qbsql startTransaction failed: ${err.message}`);
             return false;
         } finally {
             clearTimeout(timeout);
             closed = true;
-            conn.release();
+            // A stalled command can block ROLLBACK too; disconnect rather than reuse it.
+            if (discard) conn.destroy();
+            else conn.release();
         }
     }
 
