@@ -53,7 +53,7 @@ class WriteQueue {
         this.stats = stats;
         this.cfg = cfg;
 
-        // table -> { conflictKey, mode, rows: Map<pkKey, {pk, cols}>, generation, flushing }
+        // Each table owns its pending rows and one serialized in-flight write.
         this.pending = new Map();
         this.pendingRowCount = 0;
 
@@ -64,7 +64,10 @@ class WriteQueue {
     _tableState(table, conflictKey, mode, writeMode) {
         let st = this.pending.get(table);
         if (!st) {
-            st = { conflictKey, mode, writeMode, rows: new Map(), generation: 0, flushing: false };
+            st = {
+                conflictKey, mode, writeMode, rows: new Map(),
+                generation: 0, completedGeneration: 0, flushing: false, inFlight: null,
+            };
             this.pending.set(table, st);
         } else if (st.mode !== mode || st.writeMode !== writeMode || JSON.stringify(st.conflictKey) !== JSON.stringify(conflictKey)) {
             throw new Error(`qbsql/queue: incompatible queue options for table ${table} while writes are pending.`);
@@ -137,36 +140,46 @@ class WriteQueue {
         }
     }
 
-    // Flush one table (or all). Returns a promise that resolves once the write
-    // has been attempted. One flush in flight per table, EVER -- this is what
-    // prevents interleaved writes to the same row.
+    // Wait for the writes covered by this call, including already active writes.
+    // Tables can flush in parallel, but writes to one table remain serialized.
     async flush(onlyTable) {
         const tables = onlyTable ? [onlyTable] : Array.from(this.pending.keys());
-        await Promise.all(tables.map((t) => this._flushTable(t)));
+        let firstError;
+        await Promise.all(tables.map((t) => this._flushTable(t).catch((err) => {
+            if (!firstError) firstError = err;
+        })));
+        if (firstError) throw firstError;
     }
 
     async _flushTable(table) {
         const st = this.pending.get(table);
-        if (!st || st.rows.size === 0) return;
-        if (st.flushing) {
-            // A flush for this table is already in flight. If we got here via
-            // the immediate-priority path in _scheduleOrTrip, nothing armed
-            // the shared interval timer -- an immediate-priority row landing
-            // in `pending` while a same-table flush is running would
-            // otherwise be stranded with nothing scheduled to pick it up.
-            // Arm the timer as a fallback so it is swept up on the next tick.
-            this._ensureTimer();
-            return;               // one in flight per table
-        }
-        st.flushing = true;
+        if (!st) return;
 
-        // Snapshot + swap: rows arriving during this flush go into a fresh Map
-        // (the next generation), so they are never interleaved with this write.
-        const snapshot = st.rows;
+        // Later enqueues must not keep an explicit flush waiting indefinitely.
+        const target = st.generation + (st.rows.size > 0 ? 1 : 0);
+        do {
+            if (!st.inFlight) {
+                if (st.rows.size === 0) return;
+                const snapshot = st.rows;
+                st.rows = new Map();
+                st.generation++;
+                st.flushing = true;
+                this.pendingRowCount -= snapshot.size;
+
+                // Publish the promise before a provider can re-enter enqueue().
+                st.inFlight = Promise.resolve()
+                    .then(() => this._writeTable(table, st, snapshot))
+                    .finally(() => {
+                        st.inFlight = null;
+                        if (st.rows.size > 0) this._ensureTimer();
+                    });
+            }
+            await st.inFlight;
+        } while (st.completedGeneration < target);
+    }
+
+    async _writeTable(table, st, snapshot) {
         const snapshotCount = snapshot.size;
-        st.rows = new Map();
-        st.generation++;
-        this.pendingRowCount -= snapshotCount;
 
         const started = process.hrtime.bigint();
         let statements = 0;
@@ -219,6 +232,7 @@ class WriteQueue {
             if (firstError) throw firstError;
             log.debug('queue', `flushed ${table}: ${snapshotCount} rows -> ${statements} statements in ${ms.toFixed(1)}ms`);
         } finally {
+            st.completedGeneration = st.generation;
             st.flushing = false;
         }
     }

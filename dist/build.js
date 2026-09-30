@@ -21309,7 +21309,16 @@ var require_queue = __commonJS({
       _tableState(table, conflictKey, mode, writeMode) {
         let st = this.pending.get(table);
         if (!st) {
-          st = { conflictKey, mode, writeMode, rows: /* @__PURE__ */ new Map(), generation: 0, flushing: false };
+          st = {
+            conflictKey,
+            mode,
+            writeMode,
+            rows: /* @__PURE__ */ new Map(),
+            generation: 0,
+            completedGeneration: 0,
+            flushing: false,
+            inFlight: null
+          };
           this.pending.set(table, st);
         } else if (st.mode !== mode || st.writeMode !== writeMode || JSON.stringify(st.conflictKey) !== JSON.stringify(conflictKey)) {
           throw new Error(`qbsql/queue: incompatible queue options for table ${table} while writes are pending.`);
@@ -21371,26 +21380,38 @@ var require_queue = __commonJS({
           if (this.timer.unref) this.timer.unref();
         }
       }
-      // Flush one table (or all). Returns a promise that resolves once the write
-      // has been attempted. One flush in flight per table, EVER -- this is what
-      // prevents interleaved writes to the same row.
+      // Wait for the writes covered by this call, including already active writes.
+      // Tables can flush in parallel, but writes to one table remain serialized.
       async flush(onlyTable) {
         const tables = onlyTable ? [onlyTable] : Array.from(this.pending.keys());
-        await Promise.all(tables.map((t) => this._flushTable(t)));
+        let firstError;
+        await Promise.all(tables.map((t) => this._flushTable(t).catch((err) => {
+          if (!firstError) firstError = err;
+        })));
+        if (firstError) throw firstError;
       }
       async _flushTable(table) {
         const st = this.pending.get(table);
-        if (!st || st.rows.size === 0) return;
-        if (st.flushing) {
-          this._ensureTimer();
-          return;
-        }
-        st.flushing = true;
-        const snapshot = st.rows;
+        if (!st) return;
+        const target = st.generation + (st.rows.size > 0 ? 1 : 0);
+        do {
+          if (!st.inFlight) {
+            if (st.rows.size === 0) return;
+            const snapshot = st.rows;
+            st.rows = /* @__PURE__ */ new Map();
+            st.generation++;
+            st.flushing = true;
+            this.pendingRowCount -= snapshot.size;
+            st.inFlight = Promise.resolve().then(() => this._writeTable(table, st, snapshot)).finally(() => {
+              st.inFlight = null;
+              if (st.rows.size > 0) this._ensureTimer();
+            });
+          }
+          await st.inFlight;
+        } while (st.completedGeneration < target);
+      }
+      async _writeTable(table, st, snapshot) {
         const snapshotCount = snapshot.size;
-        st.rows = /* @__PURE__ */ new Map();
-        st.generation++;
-        this.pendingRowCount -= snapshotCount;
         const started = process.hrtime.bigint();
         let statements = 0;
         let rowsWritten = 0;
@@ -21440,6 +21461,7 @@ var require_queue = __commonJS({
           if (firstError) throw firstError;
           log2.debug("queue", `flushed ${table}: ${snapshotCount} rows -> ${statements} statements in ${ms.toFixed(1)}ms`);
         } finally {
+          st.completedGeneration = st.generation;
           st.flushing = false;
         }
       }

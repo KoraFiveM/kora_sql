@@ -42,6 +42,178 @@ const CFG = {
     maxPlaceholders: 60000, padToBuckets: false,
 };
 
+function deferred() {
+    let resolve;
+    const promise = new Promise((done) => { resolve = done; });
+    return { promise, resolve };
+}
+
+const nextTurn = () => new Promise((resolve) => setImmediate(resolve));
+
+test('flush waits for active and covered pending writes without chasing later enqueues', async (t) => {
+    const { pools } = makeFakePools();
+    const started = [deferred(), deferred(), deferred()];
+    const release = [deferred(), deferred(), deferred()];
+    const written = [];
+    pools.write.execute = async (sql, params) => {
+        const index = written.length;
+        written.push(params[0]);
+        started[index].resolve();
+        await release[index].promise;
+        return [{ affectedRows: 1 }];
+    };
+    const q = new WriteQueue(null, pools, new Stats(150, 50), { ...CFG, flushInterval: 60000 });
+    t.after(() => { release.forEach((gate) => gate.resolve()); clearTimeout(q.timer); });
+    q.enqueue('players', 'citizenid', { pk: 'A', cols: { money: 1 } });
+    const first = q.flush('players');
+    await started[0].promise;
+    let emptyDone = false;
+    const empty = q.flush('players').then(() => { emptyDone = true; });
+    q.enqueue('players', 'citizenid', { pk: 'B', cols: { money: 2 } });
+    let coveredDone = 0;
+    const covered = [q.flush('players'), q.flush('players')].map((p) => p.then(() => { coveredDone++; }));
+    await nextTurn();
+    assert.equal(emptyDone, false, 'an empty pending map does not mean the active write finished');
+    assert.equal(coveredDone, 0);
+    release[0].resolve();
+    await Promise.all([first, empty, started[1].promise]);
+    assert.equal(coveredDone, 0, 'all callers covering B must await its write');
+    assert.deepEqual(written, ['A', 'B']);
+    q.enqueue('players', 'citizenid', { pk: 'C', cols: { money: 3 } });
+    release[1].resolve();
+    await Promise.all(covered);
+    assert.deepEqual(written, ['A', 'B'], 'C arrived after the captured target');
+    assert.equal(q.pendingRowCount, 1);
+    const last = q.flush('players');
+    await started[2].promise;
+    release[2].resolve();
+    await last;
+    assert.deepEqual(written, ['A', 'B', 'C']);
+    assert.equal(q.pendingRowCount, 0);
+});
+
+test('flush publishes its active write before a provider re-enters immediate enqueue', async (t) => {
+    const { pools } = makeFakePools();
+    const release = deferred();
+    const started = deferred();
+    const written = [];
+    let active = 0;
+    let maxActive = 0;
+    pools.write.execute = async (sql, params) => {
+        active++;
+        maxActive = Math.max(maxActive, active);
+        written.push(params[0]);
+        if (params[0] === 'A') {
+            q.enqueue('players', 'citizenid', { pk: 'B', cols: { money: 2 } }, { priority: 'immediate' });
+            started.resolve();
+            await release.promise;
+        }
+        active--;
+        return [{ affectedRows: 1 }];
+    };
+    const q = new WriteQueue(null, pools, new Stats(150, 50), { ...CFG, flushInterval: 60000 });
+    t.after(() => { release.resolve(); clearTimeout(q.timer); });
+    q.enqueue('players', 'citizenid', { pk: 'A', cols: { money: 1 } }, { priority: 'immediate' });
+    await started.promise;
+    const completion = q.flush('players');
+    await nextTurn();
+    assert.deepEqual(written, ['A']);
+    release.resolve();
+    await completion;
+    assert.equal(maxActive, 1, 'same-table writes must never overlap');
+    assert.deepEqual(written, ['A', 'B']);
+});
+
+test('flush checks completed generations when another writer starts before its waiter resumes', async (t) => {
+    const { pools } = makeFakePools();
+    const started = [deferred(), deferred()];
+    const release = [deferred(), deferred()];
+    let calls = 0;
+    pools.write.execute = async () => {
+        const index = calls++;
+        started[index].resolve();
+        await release[index].promise;
+        return [{ affectedRows: 1 }];
+    };
+    const q = new WriteQueue(null, pools, new Stats(150, 50), { ...CFG, flushInterval: 60000 });
+    t.after(() => { release.forEach((gate) => gate.resolve()); clearTimeout(q.timer); });
+    q.enqueue('players', 'citizenid', { pk: 'A', cols: { money: 1 } });
+    const st = q.pending.get('players');
+    let inFlight = null;
+    let reentered;
+    let injected = false;
+    Object.defineProperty(st, 'inFlight', {
+        get: () => inFlight,
+        set: (value) => {
+            inFlight = value;
+            if (value === null && !injected) {
+                injected = true;
+                // A caller may start B after cleanup, before A's waiters resume.
+                queueMicrotask(() => { reentered = q.flush('players'); });
+            }
+        },
+    });
+    const first = q.flush('players');
+    await started[0].promise;
+    q.enqueue('players', 'citizenid', { pk: 'B', cols: { money: 2 } });
+    let settled = false;
+    const watched = q.flush('players').then(() => { settled = true; });
+    release[0].resolve();
+    await started[1].promise;
+    await nextTurn();
+    assert.equal(settled, false, 'starting B does not mean the covered generation completed');
+    release[1].resolve();
+    await Promise.all([first, watched, reentered]);
+    assert.equal(calls, 2);
+});
+
+test('failed active flush rearms the timer for immediate pending writes', async (t) => {
+    const { executed, pools } = makeFakePools({
+        failFirst: 6,
+        onFailure: (calls) => {
+            if (calls === 1) q.enqueue('players', 'citizenid', { pk: 'B', cols: { money: 2 } }, { priority: 'immediate' });
+        },
+    });
+    const q = new WriteQueue(null, pools, new Stats(150, 50), { ...CFG, flushInterval: 60000 });
+    t.after(() => clearTimeout(q.timer));
+    q.enqueue('players', 'citizenid', { pk: 'A', cols: { money: 1 } }, { priority: 'immediate' });
+    await assert.rejects(q.flush('players'), /failed after 5 retries/);
+    assert.ok(q.timer, 'failed immediate writes must not strand the pending generation');
+    assert.equal(q.pendingRowCount, 1);
+    await q.flush('players');
+    assert.deepEqual(executed.filter(({ sql }) => !/qbsql_deadletter/.test(sql)).map(({ params }) => params), [['B', 2]]);
+});
+
+test('flush waits for every selected table before reporting the first write failure', async (t) => {
+    const { pools } = makeFakePools({ failFirst: 6 });
+    const execute = pools.write.execute;
+    const healthyStarted = deferred();
+    const deadLettered = deferred();
+    const release = deferred();
+    pools.write.execute = async (sql, params) => {
+        if (/`healthy`/.test(sql)) {
+            healthyStarted.resolve();
+            await release.promise;
+            return [{ affectedRows: 1 }];
+        }
+        const result = await execute(sql, params);
+        if (/qbsql_deadletter/.test(sql)) deadLettered.resolve();
+        return result;
+    };
+    const q = new WriteQueue(null, pools, new Stats(150, 50), { ...CFG, flushInterval: 60000 });
+    t.after(() => { release.resolve(); clearTimeout(q.timer); });
+    q.enqueue('failed', 'id', { pk: 'A', cols: { money: 1 } });
+    q.enqueue('healthy', 'id', { pk: 'B', cols: { money: 2 } });
+    let settled = false;
+    const result = q.flush().then(() => { settled = true; }, (err) => { settled = true; return err; });
+    await Promise.all([healthyStarted.promise, deadLettered.promise]);
+    await nextTurn();
+    assert.equal(settled, false, 'a failed table must not bypass another active write');
+    release.resolve();
+    assert.match((await result).message, /write to failed failed after 5 retries/);
+    assert.equal(q.pendingRowCount, 0);
+});
+
 test('same PK enqueued twice merges to one row with per-column last-write-wins', async () => {
     const { executed, pools } = makeFakePools();
     const q = new WriteQueue(null, pools, new Stats(150, 50), CFG);
