@@ -46,4 +46,18 @@ harness.test('migrateFiles reports a missing file without calling the driver', f
     harness.assertEqual(#net.jsCalls, before)
 end)
 
+harness.test('checked transaction and recovery wrappers preserve operation context', function()
+    QB.sql.transactionChecked({ { query = 'UPDATE receipt', expectedRows = 1 } }, { key = 'claim', fingerprint = 'terms', citizenids = { 'CID' } })
+    local call = net.lastCall('transactionChecked')
+    harness.assertEqual(call.args[1][1].expectedRows, 1)
+    harness.assertEqual(call.args[2].fingerprint, 'terms')
+    QB.sql.awaitCheckedOperation('claim', 'terms')
+    call = net.lastCall('awaitCheckedOperation')
+    harness.assertEqual(call.args[1], 'claim')
+    harness.assertEqual(call.args[2], 'terms')
+    QB.sql.awaitCheckedOperations('qbhousing:')
+    call = net.lastCall('awaitCheckedOperations')
+    harness.assertEqual(call.args[1], 'qbhousing:')
+end)
+
 harness.report('init')

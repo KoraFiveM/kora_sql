@@ -71,6 +71,31 @@ For writes.
 Same, wrapped in BEGIN/COMMIT; rolls back on any error. Also accepts the oxmysql
 "one query, many param sets" form: `QB.sql.transaction(sql, { {p1}, {p2}, ... })`.
 
+### QB.sql.transactionChecked(statements, operation?) -> outcome, errString
+Runs on one connection and checks each statement before COMMIT. A statement may
+set `expectedRows` (write affected rows or SELECT row count) and `failureCode`.
+A mismatch rolls back every statement. Success is `{success=true, results={...}}`;
+confirmed rollback is `{success=false, code='conflict'|'duplicate'|'unavailable'|failureCode}`.
+A lost COMMIT reply or failed rollback returns `code='indeterminate'`; reconcile
+using a durable receipt rather than compensating or assuming failure. Requires
+transactional tables. DDL and external side effects cannot be rolled back.
+
+Optional `operation={key=..., fingerprint=..., citizenids={...}}` joins an existing
+in-flight worker with identical terms. It is an in-memory restart bridge for a
+consumer resource, not a durable idempotency store. The consumer must write its
+unique operation receipt in the same transaction as its mutations.
+
+### QB.sql.awaitCheckedOperation(key, fingerprint?) -> state, errString
+Joins an existing checked worker without submitting SQL. Returns `{active=false}`
+when none exists, otherwise `{active=true, result=outcome}` after it settles.
+Mismatched terms return an indeterminate result. After a consumer restart, wait
+here before reading a pending receipt or releasing its persistent player fence.
+`QB.sql.awaitCheckedOperations(prefix)` waits for all currently active checked
+workers matching a key prefix and returns `{settled=count}`. Use it once before
+loading a restarted consumer's caches; it never executes replacement SQL.
+The server export `hasActivePlayerOperation(citizenid)` is a synchronous lifecycle
+guard; it reports active checked workers declaring that character ID.
+
 ### QB.sql.enqueue(table, conflictKey, row, opts) — FIRE AND FORGET
 Never yields. Hands one `{ pk, cols }` row to the coalescing queue.
 ```lua

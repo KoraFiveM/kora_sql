@@ -79,6 +79,18 @@ function QB.sql.insert(sql, params)   return await('insert', sql, params) end
 function QB.sql.update(sql, params)   return await('update', sql, params) end
 function QB.sql.batch(statements)     return await('batch', statements) end
 function QB.sql.transaction(a, b)     return await('transaction', a, b) end
+function QB.sql.transactionChecked(statements, operation)
+    if operation then return await('transactionChecked', statements, operation) end
+    return await('transactionChecked', statements)
+end
+
+function QB.sql.awaitCheckedOperation(key, fingerprint)
+    return await('awaitCheckedOperation', key, fingerprint)
+end
+
+function QB.sql.awaitCheckedOperations(prefix)
+    return await('awaitCheckedOperations', prefix)
+end
 function QB.sql.upsert(table_, key, rows, opts) return await('upsert', table_, key, rows, opts) end
 function QB.sql.migrate(resource, migrations)   return await('migrate', resource, migrations) end
 

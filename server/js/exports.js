@@ -161,6 +161,10 @@ function register(api, exports) {
 
     // --- transaction / batch ---
     const transaction = dataExport('transaction', (queries, params, resource) => api.txn.transaction(queries, params, resource));
+    dataExport('transactionChecked', (queries, operation, resource) => api.txn.transactionChecked(queries, operation));
+    dataExport('awaitCheckedOperation', (key, fingerprint, resource) => api.txn.awaitCheckedOperation(key, fingerprint));
+    dataExport('awaitCheckedOperations', (prefix, resource) => api.txn.awaitCheckedOperations(prefix));
+    exports('hasActivePlayerOperation', (citizenid) => api.txn ? api.txn.hasActivePlayerOperation(citizenid) : false);
     dataExport('batch', (queries, params, resource) => api.txn.batch(queries, params));
     oxAsync('transaction', transaction);
 

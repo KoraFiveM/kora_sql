@@ -15,6 +15,98 @@ const { normalizeParams, normalizeNamedPlaceholders } = require('./execute');
 class TransactionRunner {
     constructor(pools) {
         this.pools = pools;
+        this.checkedInFlight = new Map();
+    }
+
+    // Expected row counts are business preconditions, not merely SQL success.
+    transactionChecked(queries, operation) {
+        if (!operation) return this._transactionChecked(queries);
+        if (typeof operation.key !== 'string' || typeof operation.fingerprint !== 'string') {
+            return Promise.reject(new TypeError('Checked operation needs key and fingerprint'));
+        }
+        const previous = this.checkedInFlight.get(operation.key);
+        if (previous) {
+            if (previous.fingerprint !== operation.fingerprint) {
+                return Promise.resolve({ success: false, code: 'indeterminate', message: 'Another request owns this operation key' });
+            }
+            return previous.promise;
+        }
+        const promise = this._transactionChecked(queries);
+        this.checkedInFlight.set(operation.key, { fingerprint: operation.fingerprint, promise, citizenids: Array.isArray(operation.citizenids) ? operation.citizenids : [] });
+        promise.finally(() => {
+            if (this.checkedInFlight.get(operation.key)?.promise === promise) this.checkedInFlight.delete(operation.key);
+        }).catch(() => {});
+        return promise;
+    }
+
+    hasActivePlayerOperation(citizenid) {
+        for (const operation of this.checkedInFlight.values()) {
+            if (operation.citizenids.includes(citizenid)) return true;
+        }
+        return false;
+    }
+
+    async awaitCheckedOperation(key, fingerprint) {
+        const operation = this.checkedInFlight.get(key);
+        if (!operation) return { active: false };
+        if (fingerprint != null && operation.fingerprint !== fingerprint) {
+            return { active: true, result: { success: false, code: 'indeterminate', message: 'Another request owns this operation key' } };
+        }
+        return { active: true, result: await operation.promise };
+    }
+
+    async awaitCheckedOperations(prefix) {
+        if (typeof prefix !== 'string' || !prefix.length) throw new TypeError('An operation key prefix is required');
+        const pending = [];
+        for (const [key, operation] of this.checkedInFlight) {
+            if (key.startsWith(prefix)) pending.push(operation.promise);
+        }
+        await Promise.all(pending);
+        return { settled: pending.length };
+    }
+
+    async _transactionChecked(queries) {
+        if (!Array.isArray(queries) || !queries.length) throw new TypeError('Checked transaction requires statements');
+        const statements = this._normalise(queries);
+        for (const q of queries) {
+            if (q.expectedRows !== undefined && (!Number.isSafeInteger(q.expectedRows) || q.expectedRows < 0)) {
+                throw new TypeError('expectedRows must be a non-negative integer');
+            }
+        }
+        const conn = await this.pools.write.getConnection();
+        const results = [];
+        let committing = false;
+        let unsafe = false;
+        let index = 0;
+        try {
+            await conn.beginTransaction();
+            for (; index < statements.length; index++) {
+                const st = statements[index];
+                const [result] = await conn.query(st.sql, st.params);
+                const count = Array.isArray(result) ? result.length : result.affectedRows;
+                if (queries[index].expectedRows !== undefined && count !== queries[index].expectedRows) {
+                    const err = new Error('Transaction precondition changed');
+                    err.operationCode = queries[index].failureCode || 'conflict';
+                    throw err;
+                }
+                results.push(result);
+            }
+            committing = true;
+            await conn.commit();
+            return { success: true, results };
+        } catch (err) {
+            if (committing) unsafe = true;
+            try { await conn.rollback(); } catch (_) { unsafe = true; }
+            return {
+                success: false,
+                code: committing || unsafe ? 'indeterminate' : err.operationCode || (err.code === 'ER_DUP_ENTRY' ? 'duplicate' : 'unavailable'),
+                statement: index + 1,
+                message: err.operationCode ? err.message : 'Database transaction could not be confirmed',
+            };
+        } finally {
+            if (unsafe && typeof conn.destroy === 'function') conn.destroy();
+            else conn.release();
+        }
     }
 
     // Normalise oxmysql's two argument shapes into an array of {sql, params}.

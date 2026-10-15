@@ -34,6 +34,79 @@ function deferred() {
 
 const nextTurn = () => new Promise((resolve) => setImmediate(resolve));
 
+test('checked transaction rejects a zero-row precondition before dependent writes', async () => {
+    const { runner, calls, connection } = harness();
+    connection.query = async (sql) => { calls.push(['query', sql]); return [{ affectedRows: 0 }, []]; };
+    const result = await runner.transactionChecked([
+        { query: 'UPDATE balance SET amount = amount - 100 WHERE amount >= 100', expectedRows: 1, failureCode: 'insufficient_funds' },
+        { query: 'INSERT INTO ownership VALUES (1)' },
+    ]);
+    assert.equal(result.success, false);
+    assert.equal(result.code, 'insufficient_funds');
+    assert.deepEqual(calls.map(([kind]) => kind), ['begin', 'query', 'rollback', 'release']);
+});
+
+test('checked transaction returns results only after confirmed commit', async () => {
+    const { runner, calls, connection } = harness();
+    connection.query = async () => [{ affectedRows: 1, insertId: 7 }, []];
+    const result = await runner.transactionChecked([{ query: 'INSERT INTO receipt VALUES (1)', expectedRows: 1 }]);
+    assert.equal(result.success, true);
+    assert.equal(result.results[0].insertId, 7);
+    assert.deepEqual(calls.map(([kind]) => kind), ['begin', 'commit', 'release']);
+});
+
+test('checked transaction preserves commit uncertainty and discards its connection', async () => {
+    const { runner, calls, connection } = harness();
+    connection.commit = async () => { calls.push(['commit']); throw new Error('reply lost after commit'); };
+    const result = await runner.transactionChecked([{ query: 'INSERT INTO receipt VALUES (1)' }]);
+    assert.equal(result.success, false);
+    assert.equal(result.code, 'indeterminate');
+    assert.equal(calls.at(-1)[0], 'destroy');
+});
+
+test('a restarted provider joins an in-flight checked operation without executing twice', async () => {
+    const { runner, calls, connection } = harness();
+    const blocked = deferred();
+    connection.query = async () => { calls.push(['query']); return blocked.promise; };
+    const operation = { key: 'bank:resource:key', fingerprint: 'immutable terms' };
+    const first = runner.transactionChecked([{ query: 'INSERT INTO receipt VALUES (1)' }], operation);
+    await nextTurn();
+    const retried = runner.transactionChecked([{ query: 'INSERT INTO receipt VALUES (1)' }], operation);
+    assert.equal(first, retried);
+    const changed = await runner.transactionChecked([], { ...operation, fingerprint: 'changed terms' });
+    assert.equal(changed.code, 'indeterminate');
+    blocked.resolve([{ affectedRows: 1 }, []]);
+    assert.equal((await retried).success, true);
+    assert.equal(calls.filter(([kind]) => kind === 'query').length, 1);
+    assert.equal(calls.filter(([kind]) => kind === 'commit').length, 1);
+});
+
+test('receipt recovery waits for an old driver worker without submitting new SQL', async () => {
+    const { runner, calls, connection } = harness();
+    const blocked = deferred();
+    connection.query = async () => { calls.push(['query']); return blocked.promise; };
+    const operation = { key: 'inventory:claim', fingerprint: 'source revision and destination', citizenids: ['CITIZEN'] };
+    const transaction = runner.transactionChecked([{ query: 'UPDATE recovery receipt', expectedRows: 1 }], operation);
+    await nextTurn();
+    assert.equal(runner.hasActivePlayerOperation('CITIZEN'), true);
+    let allResolved = false;
+    const all = runner.awaitCheckedOperations('inventory:').then((value) => { allResolved = true; return value; });
+    let resolved = false;
+    const recovery = runner.awaitCheckedOperation(operation.key, operation.fingerprint).then((result) => { resolved = true; return result; });
+    await nextTurn();
+    assert.equal(allResolved, false);
+    assert.equal(resolved, false, 'a pending receipt is unsafe until the old worker settles');
+    assert.equal((await runner.awaitCheckedOperation(operation.key, 'changed')).result.code, 'indeterminate');
+    blocked.resolve([{ affectedRows: 1 }, []]);
+    await transaction;
+    assert.equal((await all).settled, 1);
+    assert.deepEqual(await runner.awaitCheckedOperations('inventory:'), { settled: 0 });
+    assert.equal((await recovery).result.success, true);
+    assert.equal(calls.filter(([kind]) => kind === 'query').length, 1);
+    assert.deepEqual(await runner.awaitCheckedOperation(operation.key), { active: false });
+    assert.equal(runner.hasActivePlayerOperation('CITIZEN'), false);
+});
+
 test('transaction accepts every oxmysql query shape and normalizes named binds', async () => {
     const { runner, calls } = harness();
     const ok = await runner.transaction([
