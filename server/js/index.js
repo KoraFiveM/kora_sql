@@ -14,6 +14,8 @@ const poolBuilder = require('./pool');
 const { StatementCache } = require('./statements');
 const { Stats } = require('./stats');
 const { Executor } = require('./execute');
+const { createLegacyInventoryBridge } = require('./legacy-inventory');
+const { createLegacyHousingBridge } = require('./legacy-housing');
 const { WriteQueue } = require('./queue');
 const { TransactionRunner } = require('./transaction');
 const { Migrator } = require('./migrate');
@@ -92,7 +94,17 @@ async function boot() {
         },
     });
     api.pools = pools;
-    api.executor = new Executor(pools, api.statements, api.stats);
+    const legacyInventory = createLegacyInventoryBridge({
+        getState: () => GetResourceState('qbinventory'),
+        request: (callback) => registerExport.qbinventory.deleteLegacyPoliceTrash(callback),
+        onStop: (callback) => on('onResourceStop', callback),
+    });
+    const legacyHousing = createLegacyHousingBridge({
+        getState: () => GetResourceState('qbhousing'),
+        request: (operation, args, callback) => registerExport.qbhousing.readLegacyHousing(operation, args, callback),
+        onStop: (callback) => on('onResourceStop', callback),
+    });
+    api.executor = new Executor(pools, api.statements, api.stats, legacyInventory, legacyHousing);
     api.queue = new WriteQueue(api.executor, pools, api.stats, cfg);
     api.txn = new TransactionRunner(pools);
     api.migrator = new Migrator(pools);

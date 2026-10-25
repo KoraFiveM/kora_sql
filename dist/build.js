@@ -21015,10 +21015,12 @@ var require_execute3 = __commonJS({
     }
     __name(normalizeNamedPlaceholders, "normalizeNamedPlaceholders");
     var _Executor = class _Executor {
-      constructor(pools, statements, stats) {
+      constructor(pools, statements, stats, legacyInventory = null, legacyHousing = null) {
         this.pools = pools;
         this.statements = statements;
         this.stats = stats;
+        this.legacyInventory = legacyInventory;
+        this.legacyHousing = legacyHousing;
       }
       // Choose the pool. Writes and anything ambiguous go to the write pool; only
       // statements that are unambiguously reads go to the read pool. A leading
@@ -21044,7 +21046,10 @@ var require_execute3 = __commonJS({
         let rowCount = 0;
         try {
           let result;
-          if (this.statements.isPreparable(sql)) {
+          const legacy = this.legacyHousing && this.legacyHousing(sql, params, resource) || this.legacyInventory && this.legacyInventory(sql, params);
+          if (legacy) {
+            result = [await legacy, void 0];
+          } else if (this.statements.isPreparable(sql)) {
             try {
               result = await pool.execute(sql, params || []);
               this.statements.recordHit(sql);
@@ -21153,6 +21158,145 @@ var require_execute3 = __commonJS({
     __name(_Executor, "Executor");
     var Executor2 = _Executor;
     module2.exports = { Executor: Executor2, normalizeParams, normalizeNamedPlaceholders, NULL_SENTINEL };
+  }
+});
+
+// server/js/legacy-inventory.js
+var require_legacy_inventory = __commonJS({
+  "server/js/legacy-inventory.js"(exports2, module2) {
+    "use strict";
+    var DELETE_TRASH = /^\s*DELETE\s+FROM\s+(?:inventories|`inventories`)\s+WHERE\s+(?:identifier|`identifier`)\s*=\s*(?:'([^']*)'|\?|:([A-Za-z_][A-Za-z0-9_]*))\s*;?\s*$/i;
+    function isPoliceTrashDelete(sql, params) {
+      const match = typeof sql === "string" && DELETE_TRASH.exec(sql);
+      if (!match) return false;
+      if (match[1] !== void 0) return match[1] === "policetrash";
+      if (match[2]) return params && !Array.isArray(params) && params[match[2]] === "policetrash";
+      return Array.isArray(params) && params.length === 1 && params[0] === "policetrash";
+    }
+    __name(isPoliceTrashDelete, "isPoliceTrashDelete");
+    function createLegacyInventoryBridge2({ getState, request, onStop }) {
+      const pending = /* @__PURE__ */ new Set();
+      onStop((name) => {
+        if (name !== "qbinventory" && name !== "qbsql") return;
+        for (const finish of [...pending]) finish(null, `${name} stopped during legacy police trash cleanup`);
+      });
+      return /* @__PURE__ */ __name(function legacyInventory(sql, params) {
+        if (!isPoliceTrashDelete(sql, params)) return null;
+        const state = getState();
+        if (state !== "started" && state !== "starting") return null;
+        return new Promise((resolve, reject) => {
+          let settled = false;
+          const finish = /* @__PURE__ */ __name((affectedRows, error) => {
+            if (settled) return;
+            settled = true;
+            pending.delete(finish);
+            if (error !== void 0 && error !== null) return reject(new Error(String(error)));
+            if (!Number.isSafeInteger(affectedRows) || affectedRows < 0) {
+              return reject(new Error("qbinventory returned an invalid police trash delete count"));
+            }
+            resolve({
+              fieldCount: 0,
+              affectedRows,
+              insertId: 0,
+              info: "",
+              serverStatus: 2,
+              warningStatus: 0,
+              changedRows: 0
+            });
+          }, "finish");
+          pending.add(finish);
+          try {
+            request(finish);
+          } catch (error) {
+            finish(null, error.message || String(error));
+          }
+        });
+      }, "legacyInventory");
+    }
+    __name(createLegacyInventoryBridge2, "createLegacyInventoryBridge");
+    module2.exports = { isPoliceTrashDelete, createLegacyInventoryBridge: createLegacyInventoryBridge2 };
+  }
+});
+
+// server/js/legacy-housing.js
+var require_legacy_housing = __commonJS({
+  "server/js/legacy-housing.js"(exports2, module2) {
+    "use strict";
+    function stockRead(sql, params) {
+      if (typeof sql !== "string") return null;
+      const text = sql.trim().replace(/;$/, "").trim().replace(/`(houselocations|player_houses|name|house|owned|identifier|citizenid)`/gi, "$1").replace(/\s+/g, " ").replace(/\s*=\s*/g, " = ");
+      const bind = "(\\?|:[A-Za-z_][A-Za-z0-9_]*)";
+      const specs = [
+        [/^SELECT \* FROM houselocations$/i, "locations"],
+        [new RegExp("^SELECT \\* FROM houselocations WHERE name = " + bind + "$", "i"), "location"],
+        [new RegExp("^SELECT owned FROM houselocations WHERE name = " + bind + "$", "i"), "owned"],
+        [new RegExp("^SELECT \\* FROM houselocations WHERE name LIKE " + bind + " ORDER BY LENGTH\\(name\\) desc, name DESC$", "i"), "locations_like"],
+        [/^SELECT \* FROM player_houses$/i, "owners"],
+        [new RegExp("^SELECT \\* FROM player_houses WHERE house = " + bind + "$", "i"), "house"],
+        [new RegExp("^SELECT \\* FROM player_houses WHERE citizenid = " + bind + "$", "i"), "citizen"],
+        [new RegExp("^SELECT \\* FROM player_houses WHERE identifier = " + bind + " AND citizenid = " + bind + "$", "i"), "identity"]
+      ];
+      for (const [pattern, operation] of specs) {
+        const match = pattern.exec(text);
+        if (!match) continue;
+        const args = [];
+        for (const token of match.slice(1)) {
+          const value = token === "?" ? Array.isArray(params) && params[args.length] : params && !Array.isArray(params) && params[token.slice(1)];
+          if (typeof value !== "string" || !value.length || value.length > 255) return null;
+          args.push(value);
+        }
+        if (Array.isArray(params) && params.length !== args.length) return null;
+        return { operation, args };
+      }
+      return null;
+    }
+    __name(stockRead, "stockRead");
+    function touchesStockTables(sql) {
+      if (typeof sql !== "string") return false;
+      const code = sql.replace(/'(?:\\.|''|[^'\\])*'|"(?:\\.|""|[^"\\])*"|\/\*[\s\S]*?\*\/|--[^\n]*(?:\n|$)|#[^\n]*(?:\n|$)/g, " ");
+      return /\b(?:FROM|JOIN|UPDATE|INTO|TABLE)\s+(?:(?:`[^`]+`|[A-Za-z_][\w]*)\s*\.\s*)?(?:`(?:houselocations|player_houses)`|(?:houselocations|player_houses)\b)/i.test(code);
+    }
+    __name(touchesStockTables, "touchesStockTables");
+    function createLegacyHousingBridge2({ getState, request, onStop }) {
+      const pending = /* @__PURE__ */ new Set();
+      let selected = false;
+      onStop((name) => {
+        if (name !== "qbhousing" && name !== "qbsql") return;
+        if (name === "qbhousing") selected = true;
+        for (const finish of [...pending]) finish(null, `${name} stopped during legacy housing read`);
+      });
+      return /* @__PURE__ */ __name(function legacyHousing(sql, params, resource) {
+        if (resource === "qbhousing" || !touchesStockTables(sql)) return null;
+        const state = getState();
+        if (state === "started" || state === "starting") selected = true;
+        else if (!selected) return null;
+        else return Promise.reject(new Error("Native housing stopped; stock tables are archival"));
+        const read = stockRead(sql, params);
+        if (!read) return Promise.reject(new Error("Unsupported stock housing SQL while native housing owns these records"));
+        return new Promise((resolve, reject) => {
+          let settled = false;
+          const finish = /* @__PURE__ */ __name((rows, error) => {
+            if (settled) return;
+            settled = true;
+            pending.delete(finish);
+            if (error !== void 0 && error !== null) return reject(new Error(String(error)));
+            if (rows && !Array.isArray(rows) && typeof rows === "object" && Object.keys(rows).length === 0) rows = [];
+            if (!Array.isArray(rows) || rows.some((row) => !row || typeof row !== "object" || Array.isArray(row))) {
+              return reject(new Error("Native housing returned invalid SQL rows"));
+            }
+            resolve(rows);
+          }, "finish");
+          pending.add(finish);
+          try {
+            request(read.operation, read.args, finish);
+          } catch (error) {
+            finish(null, error.message || String(error));
+          }
+        });
+      }, "legacyHousing");
+    }
+    __name(createLegacyHousingBridge2, "createLegacyHousingBridge");
+    module2.exports = { stockRead, touchesStockTables, createLegacyHousingBridge: createLegacyHousingBridge2 };
   }
 });
 
@@ -22164,6 +22308,8 @@ var poolBuilder = require_pool4();
 var { StatementCache } = require_statements();
 var { Stats } = require_stats();
 var { Executor } = require_execute3();
+var { createLegacyInventoryBridge } = require_legacy_inventory();
+var { createLegacyHousingBridge } = require_legacy_housing();
 var { WriteQueue } = require_queue();
 var { TransactionRunner } = require_transaction();
 var { Migrator } = require_migrate();
@@ -22238,7 +22384,17 @@ async function boot() {
     }, "onRetry")
   });
   api.pools = pools;
-  api.executor = new Executor(pools, api.statements, api.stats);
+  const legacyInventory = createLegacyInventoryBridge({
+    getState: /* @__PURE__ */ __name(() => GetResourceState("qbinventory"), "getState"),
+    request: /* @__PURE__ */ __name((callback) => registerExport.qbinventory.deleteLegacyPoliceTrash(callback), "request"),
+    onStop: /* @__PURE__ */ __name((callback) => on("onResourceStop", callback), "onStop")
+  });
+  const legacyHousing = createLegacyHousingBridge({
+    getState: /* @__PURE__ */ __name(() => GetResourceState("qbhousing"), "getState"),
+    request: /* @__PURE__ */ __name((operation, args, callback) => registerExport.qbhousing.readLegacyHousing(operation, args, callback), "request"),
+    onStop: /* @__PURE__ */ __name((callback) => on("onResourceStop", callback), "onStop")
+  });
+  api.executor = new Executor(pools, api.statements, api.stats, legacyInventory, legacyHousing);
   api.queue = new WriteQueue(api.executor, pools, api.stats, cfg);
   api.txn = new TransactionRunner(pools);
   api.migrator = new Migrator(pools);

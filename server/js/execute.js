@@ -89,10 +89,12 @@ function normalizeNamedPlaceholders(sql, params) {
 }
 
 class Executor {
-    constructor(pools, statements, stats) {
+    constructor(pools, statements, stats, legacyInventory = null, legacyHousing = null) {
         this.pools = pools;
         this.statements = statements;
         this.stats = stats;
+        this.legacyInventory = legacyInventory;
+        this.legacyHousing = legacyHousing;
     }
 
     // Choose the pool. Writes and anything ambiguous go to the write pool; only
@@ -121,7 +123,11 @@ class Executor {
 
         try {
             let result;
-            if (this.statements.isPreparable(sql)) {
+            const legacy = (this.legacyHousing && this.legacyHousing(sql, params, resource))
+                || (this.legacyInventory && this.legacyInventory(sql, params));
+            if (legacy) {
+                result = [await legacy, undefined];
+            } else if (this.statements.isPreparable(sql)) {
                 try {
                     result = await pool.execute(sql, params || []);
                     this.statements.recordHit(sql);

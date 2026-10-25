@@ -177,3 +177,28 @@ the full current `MySQL` global: callable top-level methods with
 - **Durability**: the coalescing queue flushes on an interval and on resource
   stop. A hard crash can lose up to one flush interval of writes. Clean paths
   (resource stop, explicit flush) always drain first.
+
+### Native police trash cleanup
+
+With `qbinventory` running, the pinned `qb-policejob` statement
+`DELETE FROM inventories WHERE identifier = 'policetrash'` delegates to the
+provider's locked stash deletion, including its cache and pending writes. The
+exact single-statement form also accepts positional `?` and named `@name` /
+`:name` binds, optional identifier backticks and a trailing semicolon. Other
+statements pass through unchanged; this is not a general legacy table mapping.
+Ad-hoc query/update/execute/prepare/rawExecute calls preserve their normal
+result shapes and report provider errors. Transaction/batch SQL is unchanged.
+Without the native provider running, the original SQL executes normally.
+The provider bounds pre-write readiness/lock waits; submitted durable deletion
+waits for its actual result instead of reporting a timeout before a late commit.
+A provider shutdown rejects pending callers.
+
+### Native housing read projection
+
+When qbhousing is running, reviewed ad-hoc SELECTs against houselocations and
+player_houses route to its current native state. The original qbhousing caller
+bypasses the bridge only for its own source import. Other unsupported ad-hoc
+reads/writes fail explicitly instead of using stale archive tables. Standalone
+stock housing is unchanged when the native provider has never been selected.
+Transaction/batch SQL is not rewritten. See qbhousing/docs/LEGACY_SQL.md for the
+exact read forms, physical mapping limits, and original-caller restriction.
