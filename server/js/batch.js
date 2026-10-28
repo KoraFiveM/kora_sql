@@ -37,7 +37,7 @@ function bucketFor(n) {
 
 function quoteIdent(id) {
     // Backtick-quote, escaping embedded backticks. Column and table names come
-    // from our own code (COLUMN_FOR map in qbcore), never from user input, but
+    // from our own code (COLUMN_FOR map in kora_core), never from user input, but
     // quoting defends the golden-SQL contract regardless.
     return '`' + String(id).replace(/`/g, '``') + '`';
 }

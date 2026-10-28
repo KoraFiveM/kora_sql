@@ -1,4 +1,4 @@
-# qbsql API reference
+# kora_sql API reference
 
 Two ways to use qbsql: the modern `QB.sql.*` API (recommended for new code), and
 the drop-in `oxmysql` / `mysql-async` / `ghmattimysql` compat surfaces (existing
@@ -6,12 +6,12 @@ code works unmodified).
 
 ## Setup
 
-1. Use the packaged qbsql resource, which includes `dist/build.js` with mysql2
+1. Use the packaged kora_sql resource, which includes `dist/build.js` with mysql2
    bundled. No runtime `node_modules` or FiveM yarn builder is required.
 2. In `server.cfg`, before any resource that queries:
    ```
    set mysql_connection_string "mysql://user:pass@localhost/qbcore?charset=utf8mb4"
-   ensure qbsql
+   ensure kora_sql
    ```
 3. Optional convars (defaults shown):
    ```
@@ -30,7 +30,7 @@ Source contributors run `yarn install` and `yarn build` after changing the JS
 driver or its dependencies. Those development dependencies are not needed by
 the running FiveM resource.
 
-If MySQL is still starting when FXServer loads qbsql, qbsql keeps retrying
+If MySQL is still starting when FXServer loads kora_sql, kora_sql keeps retrying
 network connection failures and holds database exports until it is ready. A
 server or resource restart is not required. Authentication, database-name, and
 other non-network configuration errors still fail immediately.
@@ -39,8 +39,8 @@ other non-network configuration errors still fail immediately.
 
 Add to your resource, in order:
 ```lua
-shared_script '@qblib/init.lua'
-shared_script '@qbsql/init.lua'
+shared_script '@kora_lib/init.lua'
+shared_script '@kora_sql/init.lua'
 ```
 
 ### QB.sql.ready(timeoutMs?)
@@ -123,7 +123,7 @@ Immediate awaited batched upsert (enqueueMany + flush in one call).
 
 ### QB.sql.migrate(resource, migrations) -> boolean, errString
 `migrations` = `{ {version=, name=, sql=, checksum=}, ... }`. A checksum mismatch
-on an already-applied version aborts. See qbcore's `sql/` for the pattern.
+on an already-applied version aborts. See kora_core's `sql/` for the pattern.
 
 ### QB.sql.migrateFiles(resource, migrations, checksumFn?) -> boolean, errString
 Loads `{version=, name=, file=}` entries with `LoadResourceFile`, calculates
@@ -147,12 +147,12 @@ export and every `*Sync` alias is registered too. Callback-as-second-argument,
 oxmysql's query-result semantics; `rawExecute` returns raw rows/result headers
 without mysql2 field metadata, and the oxmysql `store` export returns its SQL
 text unchanged exactly like upstream. Slow queries are attributed to the
-original calling resource, not to qbsql.
+original calling resource, not to kora_sql.
 
 ## mysql-async compat
 
-`shared_script '@oxmysql/lib/MySQL.lua'` works unchanged through qbsql's
-provided identity; `@qbsql/lib/MySQL.lua` is the direct equivalent. Both install
+`shared_script '@oxmysql/lib/MySQL.lua'` works unchanged through kora_sql's
+provided identity; `@kora_sql/lib/MySQL.lua` is the direct equivalent. Both install
 the full current `MySQL` global: callable top-level methods with
 `.await`, lazy `MySQL.Async.*`/`MySQL.Sync.*` aliases, stored-query handles,
 `MySQL.ready`/`.ready.await`, and `MySQL.startTransaction`.
@@ -180,7 +180,7 @@ the full current `MySQL` global: callable top-level methods with
 
 ### Native police trash cleanup
 
-With `qbinventory` running, the pinned `qb-policejob` statement
+With `kora_inventory` running, the pinned `qb-policejob` statement
 `DELETE FROM inventories WHERE identifier = 'policetrash'` delegates to the
 provider's locked stash deletion, including its cache and pending writes. The
 exact single-statement form also accepts positional `?` and named `@name` /
@@ -195,10 +195,10 @@ A provider shutdown rejects pending callers.
 
 ### Native housing read projection
 
-When qbhousing is running, reviewed ad-hoc SELECTs against houselocations and
-player_houses route to its current native state. The original qbhousing caller
+When kora_housing is running, reviewed ad-hoc SELECTs against houselocations and
+player_houses route to its current native state. The original kora_housing caller
 bypasses the bridge only for its own source import. Other unsupported ad-hoc
 reads/writes fail explicitly instead of using stale archive tables. Standalone
 stock housing is unchanged when the native provider has never been selected.
-Transaction/batch SQL is not rewritten. See qbhousing/docs/LEGACY_SQL.md for the
+Transaction/batch SQL is not rewritten. See kora_housing/docs/LEGACY_SQL.md for the
 exact read forms, physical mapping limits, and original-caller restriction.

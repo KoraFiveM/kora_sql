@@ -16,7 +16,7 @@ end
 local function asyncCall(jsName)
     return function(query, params, cb)
         local resource = GetInvokingResource() or GetCurrentResourceName()
-        exports.qbsql[jsName](exports.qbsql, query, params or {}, cb, resource)
+        exports.kora_sql[jsName](exports.kora_sql, query, params or {}, cb, resource)
     end
 end
 
@@ -30,7 +30,7 @@ local registrations = {
 
 registrations.mysql_transaction = function(queries, params, cb)
     local resource = GetInvokingResource() or GetCurrentResourceName()
-    exports.qbsql:transaction(queries, params, cb, resource)
+    exports.kora_sql:transaction(queries, params, cb, resource)
 end
 
 for exportName, func in pairs(registrations) do

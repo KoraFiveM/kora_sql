@@ -28,7 +28,7 @@ function fixture(options = {}) {
         (name, fn) => { registered[name] = fn; });
     return { executor, registered, calls, stats, stop() {
         state = 'stopped';
-        for (const callback of listeners) callback('qbinventory');
+        for (const callback of listeners) callback('kora_inventory');
     } };
 }
 
@@ -118,7 +118,7 @@ test('provider stop rejects a pending call and ignores its stale callback', asyn
     const f = fixture({ request: (callback) => { reply = callback; } });
     const promise = f.executor.query(SQL, []);
     f.stop();
-    await assert.rejects(promise, /qbinventory stopped/);
+    await assert.rejects(promise, /kora_inventory stopped/);
     reply(1, null);
     assert.equal(f.calls.length, 0);
 });

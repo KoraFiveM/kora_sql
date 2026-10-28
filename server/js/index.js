@@ -1,4 +1,4 @@
-// qbsql entry point (the ONLY .js file listed in server_scripts; everything
+// kora_sql entry point (the ONLY .js file listed in server_scripts; everything
 // else is pulled in via require). Constructs the pools, wires the modules, and
 // registers the export surface. On any boot failure it logs loudly and leaves
 // isReady() returning false so callers can detect the dead driver rather than
@@ -95,12 +95,12 @@ async function boot() {
     });
     api.pools = pools;
     const legacyInventory = createLegacyInventoryBridge({
-        getState: () => GetResourceState('qbinventory'),
+        getState: () => GetResourceState('kora_inventory'),
         request: (callback) => registerExport.qbinventory.deleteLegacyPoliceTrash(callback),
         onStop: (callback) => on('onResourceStop', callback),
     });
     const legacyHousing = createLegacyHousingBridge({
-        getState: () => GetResourceState('qbhousing'),
+        getState: () => GetResourceState('kora_housing'),
         request: (operation, args, callback) => registerExport.qbhousing.readLegacyHousing(operation, args, callback),
         onStop: (callback) => on('onResourceStop', callback),
     });

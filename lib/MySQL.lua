@@ -50,7 +50,7 @@ local function safeArgs(query, parameters, cb, transaction)
 end
 
 local function call(method, query, parameters, cb)
-    exports.qbsql[method](exports.qbsql, query, parameters or {}, function(result, err)
+    exports.kora_sql[method](exports.kora_sql, query, parameters or {}, function(result, err)
         if not cb then return end
         if options.return_callback_errors then cb(result, err) else cb(result) end
     end, resourceName)
@@ -58,7 +58,7 @@ end
 
 local function await(method, query, parameters)
     local p = promise.new()
-    exports.qbsql[method](exports.qbsql, query, parameters or {}, function(result, err)
+    exports.kora_sql[method](exports.kora_sql, query, parameters or {}, function(result, err)
         if err then return p:reject(err) end
         p:resolve(result)
     end, resourceName)
@@ -68,7 +68,7 @@ end
 local MySQL = setmetatable(MySQL or {}, {
     __index = function(_, index)
         return function(...)
-            return exports.qbsql[index](exports.qbsql, ...)
+            return exports.kora_sql[index](exports.kora_sql, ...)
         end
     end,
 })
@@ -77,7 +77,7 @@ local methodMt = {
     __call = function(self, query, parameters, cb)
         query, parameters, cb = safeArgs(query, parameters, cb, self.method == 'transaction')
         if self.method == 'transaction' then
-            exports.qbsql:transaction(query, parameters or {}, function(result, err)
+            exports.kora_sql:transaction(query, parameters or {}, function(result, err)
                 if cb then
                     if options.return_callback_errors then cb(result, err) else cb(result) end
                 end
@@ -135,7 +135,7 @@ MySQL.Sync = setmetatable({ store = addStore }, aliasMt)
 MySQL.Async = setmetatable({ store = addStore }, aliasMt)
 
 local function onReady(cb)
-    exports.qbsql:awaitConnection()
+    exports.kora_sql:awaitConnection()
     if cb then cb() end
     return true
 end
@@ -148,7 +148,7 @@ MySQL.ready = setmetatable({ await = onReady }, {
 
 function MySQL.startTransaction(cb)
     assert(isCallable(cb), 'startTransaction requires a callback')
-    return exports.qbsql:startTransaction(cb, resourceName)
+    return exports.kora_sql:startTransaction(cb, resourceName)
 end
 
 _ENV.MySQL = MySQL

@@ -12,7 +12,7 @@ function fixture(options = {}) {
         onStop: (fn) => { stopped = fn; } });
     const pool = { execute: async (sql, params) => { calls.push({ sql, params }); return [[{ archive: true }], []]; } };
     const executor = new Executor({ read: pool, write: pool }, { isPreparable: () => true, recordHit() {} }, { record() {} }, null, bridge);
-    return { executor, calls, requests, stop() { state = 'stopped'; stopped('qbhousing'); } };
+    return { executor, calls, requests, stop() { state = 'stopped'; stopped('kora_housing'); } };
 }
 
 test('recognizes all pinned read forms with exact bindings', () => {
@@ -44,7 +44,7 @@ test('query/single/scalar/prepare use native rows and named binds without archiv
 
 test('only the original owning resource bypasses projection during import', async () => {
     const f = fixture();
-    await f.executor.query('SELECT * FROM houselocations', [], 'qbhousing');
+    await f.executor.query('SELECT * FROM houselocations', [], 'kora_housing');
     assert.equal(f.calls.length, 1);
     await f.executor.query('SELECT * FROM houselocations', [], 'other');
     assert.equal(f.calls.length, 1);

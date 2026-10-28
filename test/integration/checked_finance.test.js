@@ -16,17 +16,17 @@ test('checked finance SQL commits receipts and rejects zero-row domain changes o
         await pool.query(`CREATE TABLE players (citizenid VARCHAR(50) PRIMARY KEY, money LONGTEXT, deleted_at TIMESTAMP NULL) ENGINE=InnoDB;
             CREATE TABLE property (id INT PRIMARY KEY, owner VARCHAR(50), revision INT) ENGINE=InnoDB;`);
         const root = path.resolve(__dirname, '../..');
-        await pool.query(fs.readFileSync(path.join(root, '../qbbanking/banking.sql'), 'utf8'));
-        await pool.query(fs.readFileSync(path.join(root, '../qbbanking/sql/001_durable_operations.sql'), 'utf8'));
-        await pool.query(fs.readFileSync(path.join(root, '../qbcore/sql/010_player_column_operations.sql'), 'utf8'));
+        await pool.query(fs.readFileSync(path.join(root, '../kora_banking/banking.sql'), 'utf8'));
+        await pool.query(fs.readFileSync(path.join(root, '../kora_banking/sql/001_durable_operations.sql'), 'utf8'));
+        await pool.query(fs.readFileSync(path.join(root, '../kora_core/sql/010_player_column_operations.sql'), 'utf8'));
         await pool.query(`INSERT INTO players VALUES ('BUYER', '{"bank":1000,"cash":25}', NULL), ('SELLER','{"bank":0}',NULL);
             INSERT INTO property VALUES (1,'SELLER',1);
             INSERT INTO bank_accounts (account_name,account_balance,account_type) VALUES ('society',0,'job');`);
-        const source = fs.readFileSync(path.join(root, '../qbbanking/server/finance.lua'), 'utf8');
+        const source = fs.readFileSync(path.join(root, '../kora_banking/server/finance.lua'), 'utf8');
         const playerUpdate = source.match(/query = \[\[(UPDATE `players`[\s\S]*?)\]\]/)[1];
         const accountUpdate = source.match(/query = \[\[(UPDATE `bank_accounts`[\s\S]*?)\]\]/)[1];
         const request = (key, expectedOwner = 'SELLER') => [
-            { query: 'INSERT INTO bank_operations (resource,operation_key,request,receipt) VALUES (?,?,?,?)', values: ['qbhousing',key,'immutable','{"status":"completed"}'], expectedRows: 1 },
+            { query: 'INSERT INTO bank_operations (resource,operation_key,request,receipt) VALUES (?,?,?,?)', values: ['kora_housing',key,'immutable','{"status":"completed"}'], expectedRows: 1 },
             { query: playerUpdate, values: [-100,'BUYER',100,100,-100], expectedRows: 1, failureCode: 'insufficient_funds' },
             { query: playerUpdate, values: [94,'SELLER',0,0,94], expectedRows: 1 },
             { query: accountUpdate, values: [6,'society',0,0,6], expectedRows: 1 },
@@ -45,7 +45,7 @@ test('checked finance SQL commits receipts and rejects zero-row domain changes o
         assert.equal((await restarted.transactionChecked(request('sale'))).code, 'duplicate');
         assert.equal((await pool.query('SELECT owner,revision FROM property'))[0][0].revision, 2);
         assert.equal((await runner.transactionChecked([{ query: playerUpdate, values: [0,'BUYER',0,0,0], expectedRows: 1 }])).success, true, 'unchanged matched rows retain mysql2 FOUND_ROWS semantics');
-        await pool.query('INSERT INTO qbcore_player_column_operations (citizenid,column_name,resource,operation_key,fingerprint) VALUES (?,?,?,?,?)', ['BUYER','money','qbbanking','qbhousing:sale','[["BUYER"],["money"]]']);
+        await pool.query('INSERT INTO qbcore_player_column_operations (citizenid,column_name,resource,operation_key,fingerprint) VALUES (?,?,?,?,?)', ['BUYER','money','kora_banking','qbhousing:sale','[["BUYER"],["money"]]']);
         assert.equal((await pool.query('SELECT COUNT(*) AS n FROM qbcore_player_column_operations'))[0][0].n, 1);
         await pool.query("UPDATE players SET money='{\"bank\":-100}' WHERE citizenid='SELLER'");
         assert.equal((await runner.transactionChecked([{ query: playerUpdate, values: [20,'SELLER',0,0,20], expectedRows: 1 }])).success, true);
@@ -54,10 +54,10 @@ test('checked finance SQL commits receipts and rejects zero-row domain changes o
             const oldConnection = await pool.getConnection();
             const key = commit ? 'old-driver-commit' : 'old-driver-rollback';
             await oldConnection.beginTransaction();
-            await oldConnection.query('INSERT INTO bank_operations (resource,operation_key,request,receipt) VALUES (?,?,?,?)', ['qbhousing',key,'terms','{"status":"completed"}']);
+            await oldConnection.query('INSERT INTO bank_operations (resource,operation_key,request,receipt) VALUES (?,?,?,?)', ['kora_housing',key,'terms','{"status":"completed"}']);
             // A fresh runner has no old worker map, as after a SQL-host restart.
             let finished = false;
-            const lookup = restarted.transactionChecked([{ query: receiptRead, values: ['qbhousing', key] }]).then(result => { finished = true; return result; });
+            const lookup = restarted.transactionChecked([{ query: receiptRead, values: ['kora_housing', key] }]).then(result => { finished = true; return result; });
             await new Promise(resolve => setTimeout(resolve, 25));
             assert.equal(finished, false, 'locking absence checks wait for the old server-side receipt transaction');
             if (commit) await oldConnection.commit(); else await oldConnection.rollback();

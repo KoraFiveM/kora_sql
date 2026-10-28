@@ -1,6 +1,6 @@
-// Migration runner. qbsql owns the RUNNER; each resource owns its migration
-// FILES (putting qbcore's DDL inside qbsql would be a layering inversion). A
-// resource calls exports.qbsql:migrate('qbcore', migrations, cb) with a list of
+// Migration runner. kora_sql owns the RUNNER; each resource owns its migration
+// FILES (putting kora_core's DDL inside kora_sql would be a layering inversion). A
+// resource calls exports.kora_sql:migrate('kora_core', migrations, cb) with a list of
 // { version, name, sql, checksum, acceptedChecksums? }. The optional legacy
 // list is only for an intentional, reviewed retry-safety rewrite of an
 // already-shipped migration; arbitrary drift remains a hard failure.

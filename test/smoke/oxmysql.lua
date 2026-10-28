@@ -51,14 +51,14 @@ h.test('query forwards the invoking resource as the trailing argument', function
     query('SELECT 1', { 42 }, function() end)
 
     local call = handle.lastCall('query')
-    h.assertTrue(call ~= nil, 'expected a query call to reach exports.qbsql')
+    h.assertTrue(call ~= nil, 'expected a query call to reach exports.kora_sql')
     -- args: (sql, params, cb, resource)
     local resource = call.args[#call.args]
     h.assertEqual(resource, 'some-other-resource', 'invoking resource not forwarded')
 end)
 
 h.test('isReady forwards the qbsql readiness result', function()
-    exports.qbsql.isReady = function() return true end
+    exports.kora_sql.isReady = function() return true end
 
     local isReady = handle.getExport('oxmysql', 'isReady')
     h.assertTrue(isReady(), 'oxmysql:isReady should return qbsql readiness')

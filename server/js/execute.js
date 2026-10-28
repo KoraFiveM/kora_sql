@@ -215,7 +215,7 @@ class Executor {
 
     // oxmysql's prepare API accepts either one parameter list or an array of
     // parameter lists, executes each set, and unpacks each response. This is
-    // distinct from qbsql's execute() OkPacket-shaped modern API.
+    // distinct from kora_sql's execute() OkPacket-shaped modern API.
     async prepare(sql, params, resource) {
         const normal = normalizeParams(params);
         const sets = Array.isArray(normal) && normal.length > 0 && normal.every(Array.isArray)

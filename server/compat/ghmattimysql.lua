@@ -13,7 +13,7 @@ end
 local function asyncCall(jsName)
     return function(query, params, cb)
         local resource = GetInvokingResource() or GetCurrentResourceName()
-        exports.qbsql[jsName](exports.qbsql, query, params or {}, cb, resource)
+        exports.kora_sql[jsName](exports.kora_sql, query, params or {}, cb, resource)
     end
 end
 
@@ -21,7 +21,7 @@ local function syncCall(jsName)
     return function(query, params)
         local resource = GetInvokingResource() or GetCurrentResourceName()
         local p = promise.new()
-        exports.qbsql[jsName](exports.qbsql, query, params or {}, function(result, err)
+        exports.kora_sql[jsName](exports.kora_sql, query, params or {}, function(result, err)
             if err then p:reject(err) else p:resolve(result) end
         end, resource)
         local ok, res = pcall(Citizen.Await, p)
@@ -39,7 +39,7 @@ local registrations = {
 
 registrations.transaction = function(queries, params, cb)
     local resource = GetInvokingResource() or GetCurrentResourceName()
-    exports.qbsql:transaction(queries, params, cb, resource)
+    exports.kora_sql:transaction(queries, params, cb, resource)
 end
 
 for exportName, func in pairs(registrations) do

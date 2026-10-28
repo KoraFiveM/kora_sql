@@ -1,6 +1,6 @@
 ---
 layout: default
-title: qbsql
+title: kora_sql
 ---
 
 A Node + mysql2 database driver for FiveM, built to replace oxmysql. **Write
@@ -18,7 +18,7 @@ everything already written against those drivers.
 
 ## Requirements
 
-qbsql is foundational — it has no dependency on qblib or qbcore, and everything
+kora_sql is foundational — it has no dependency on kora_lib or kora_core, and everything
 else in the [qbcore2](https://github.com/qbcore2) set depends on it. It needs:
 
 - A running MySQL/MariaDB server.
@@ -30,14 +30,14 @@ else in the [qbcore2](https://github.com/qbcore2) set depends on it. It needs:
 
 ## Installation
 
-`qbsql` must be `ensure`d before qblib/qbcore (and before any other resource
+`kora_sql` must be `ensure`d before kora_lib/qbcore (and before any other resource
 that queries the database) so the pool exists when they boot:
 
 ```
 set mysql_connection_string "mysql://user:pass@localhost/qbcore?charset=utf8mb4"
-ensure qbsql
-ensure qblib
-ensure qbcore
+ensure kora_sql
+ensure kora_lib
+ensure kora_core
 ```
 
 Source contributors run `yarn install` and `yarn build`; server operators use
@@ -57,7 +57,7 @@ set qbsql_debug false
 
 The provided `oxmysql` and `mysql-async` identities also resolve resource-file
 includes on current FXServer, so existing `@oxmysql/lib/MySQL.lua` and
-`@mysql-async/lib/MySQL.lua` manifest entries load qbsql's `lib/MySQL.lua`
+`@mysql-async/lib/MySQL.lua` manifest entries load kora_sql's `lib/MySQL.lua`
 without edits. The two-file resources under `stubs/` remain optional fallbacks
 for older tooling or deployment systems that insist on a literal directory.
 
@@ -66,8 +66,8 @@ for older tooling or deployment systems that insist on a literal directory.
 ### Query rows (modern API)
 ```lua
 -- server, after:
---   shared_script '@qblib/init.lua'
---   shared_script '@qbsql/init.lua'
+--   shared_script '@kora_lib/init.lua'
+--   shared_script '@kora_sql/init.lua'
 local rows, err = QB.sql.query('SELECT * FROM players WHERE license = ?', { license })
 if not rows then
     print('query failed:', err)
@@ -92,7 +92,7 @@ print(result.affectedRows, result.changedRows)
 ### The hot save path: enqueueMany (fire-and-forget)
 ```lua
 -- Never yields -- hands N rows to the coalescing queue in ONE boundary
--- crossing. This is how qbcore batches every online player's save.
+-- crossing. This is how kora_core batches every online player's save.
 local rows = {}
 for citizenid, moneyJson in pairs(pendingSaves) do
     rows[#rows + 1] = { pk = citizenid, cols = { money = moneyJson } }
@@ -116,7 +116,7 @@ end
 
 ### Migrating from oxmysql: same call signature, works unmodified
 ```lua
--- Existing oxmysql-era code. qbsql `provide`s oxmysql and registers the same
+-- Existing oxmysql-era code. kora_sql `provide`s oxmysql and registers the same
 -- __cfx_export_oxmysql_* identity, so this needs zero changes.
 local rows = exports.oxmysql:query('SELECT * FROM players WHERE license = ?', { license })
 
@@ -124,7 +124,7 @@ exports.oxmysql:insert('INSERT INTO logs (player, message) VALUES (?, ?)', { cit
     function(insertId) print(insertId) end)
 
 -- mysql-async's `MySQL` global works through its existing include unchanged;
--- @qbsql/lib/MySQL.lua is also available as an explicit direct include:
+-- @kora_sql/lib/MySQL.lua is also available as an explicit direct include:
 local job = MySQL.query.await('SELECT job FROM players WHERE citizenid = ?', { citizenid })
 MySQL.Async.execute('UPDATE players SET last_updated = NOW() WHERE citizenid = ?', { citizenid })
 ```
@@ -143,7 +143,7 @@ for each path.
 All calls are server-side. Fallible functions return `(value, errorString)` and
 never throw across the Lua/JS boundary.
 
-### `QB.sql.*` (modern, requires `@qblib/init.lua` then `@qbsql/init.lua`)
+### `QB.sql.*` (modern, requires `@kora_lib/init.lua` then `@kora_sql/init.lua`)
 ```lua
 QB.sql.ready(timeoutMs?)                      -- yields until the pool is up; true | false, errString
 QB.sql.query(sql, params) -> rows[] | nil, errString
@@ -189,11 +189,11 @@ transaction input shapes, rollback-to-`false`, and the
 rows/result headers without mysql2 field metadata, and oxmysql `store` returns
 the SQL text unchanged. Multi-statement strings are refused unless
 `qbsql_allow_multiple_statements true` is set. Slow queries are
-attributed to the original calling resource, not to qbsql.
+attributed to the original calling resource, not to kora_sql.
 
 ### mysql-async compat
-`shared_script '@oxmysql/lib/MySQL.lua'` works unchanged through qbsql's
-provided identity; `@qbsql/lib/MySQL.lua` is the direct equivalent. Both build
+`shared_script '@oxmysql/lib/MySQL.lua'` works unchanged through kora_sql's
+provided identity; `@kora_sql/lib/MySQL.lua` is the direct equivalent. Both build
 the complete current `MySQL` global: callable dual methods and `.await`,
 lazy `MySQL.Async.*`/`MySQL.Sync.*`, stored-query handles,
 `MySQL.ready`/`.ready.await`, and `MySQL.startTransaction`.
@@ -230,7 +230,7 @@ Node host). `config.lua` only holds Lua-side behaviour:
 
 `Config.compat.oxmysql` / `.mysqlAsync` / `.ghmattimysql` (each default `true`,
 toggle a compat surface off entirely), `Config.compat.installMySQLGlobal`
-(create the `MySQL` global when `@qbsql/lib/MySQL.lua` is included),
+(create the `MySQL` global when `@kora_sql/lib/MySQL.lua` is included),
 `Config.compat.warnOnSync` (default `true`, print once per resource on first
 blocking `*Sync` use), `Config.sql.awaitTimeout` (30s, how long `QB.sql.*`
 waits before rejecting), `Config.sql.readyTimeout` (60s, how long
@@ -240,9 +240,9 @@ waits before rejecting), `Config.sql.readyTimeout` (60s, how long
 
 Part of the [qbcore2](https://github.com/qbcore2) resource set:
 
-- [qblib](https://qbcore2.github.io/qblib/) — shared helper library
-- [qbcore](https://qbcore2.github.io/qbcore/) — framework core
-- [qbinventory](https://qbcore2.github.io/qbinventory/) — headless inventory
-- [qbtarget](https://qbcore2.github.io/qbtarget/) — targeting/interaction
-- [qbclothing](https://qbcore2.github.io/qbclothing/) — clothing/wardrobe
+- [qblib](https://qbcore2.github.io/kora_lib/) — shared helper library
+- [qbcore](https://qbcore2.github.io/kora_core/) — framework core
+- [qbinventory](https://qbcore2.github.io/kora_inventory/) — headless inventory
+- [qbtarget](https://qbcore2.github.io/kora_target/) — targeting/interaction
+- [qbclothing](https://qbcore2.github.io/kora_clothing/) — clothing/wardrobe
 - [full resource list ↗](https://github.com/orgs/qbcore2/repositories)

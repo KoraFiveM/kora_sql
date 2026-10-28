@@ -1,6 +1,6 @@
--- Mocks for smoke-testing qbsql's Lua compat layer under plain lua5.4 (no DB,
+-- Mocks for smoke-testing kora_sql's Lua compat layer under plain lua5.4 (no DB,
 -- no FiveM). The compat files register handlers via the __cfx_export_ event and
--- forward calls into a mocked `exports.qbsql`; these mocks capture both so a
+-- forward calls into a mocked `exports.kora_sql`; these mocks capture both so a
 -- test can assert what was registered and what the JS side would have received
 -- (including the crucial invokingResource attribution).
 
@@ -9,7 +9,7 @@ local M = {}
 function M.install()
     local exportEventHandlers = {}   -- '__cfx_export_<res>_<name>' -> handler(setCB)
     local providedExports = {}       -- 'res:name' -> func (resolved via setCB)
-    local jsCalls = {}               -- recorded exports.qbsql:<name>(...) calls
+    local jsCalls = {}               -- recorded exports.kora_sql:<name>(...) calls
     local invokingResource = nil     -- what GetInvokingResource() returns
 
     function _G.AddEventHandler(name, cb)
@@ -55,7 +55,7 @@ function M.install()
         end,
     }
 
-    -- Mock exports table. exports.qbsql:<name>(self, ...) records the call and,
+    -- Mock exports table. exports.kora_sql:<name>(self, ...) records the call and,
     -- for callback-style calls, invokes the trailing callback synchronously with
     -- a canned result so await paths resolve.
     local qbsql = {}
@@ -73,7 +73,7 @@ function M.install()
             end
         end,
     })
-    _G.exports = { qbsql = qbsql }
+    _G.exports = { kora_sql = qbsql }
 
     return {
         providedExports = providedExports,

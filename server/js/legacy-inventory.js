@@ -16,7 +16,7 @@ function isPoliceTrashDelete(sql, params) {
 function createLegacyInventoryBridge({ getState, request, onStop }) {
     const pending = new Set();
     onStop((name) => {
-        if (name !== 'qbinventory' && name !== 'qbsql') return;
+        if (name !== 'kora_inventory' && name !== 'kora_sql') return;
         for (const finish of [...pending]) finish(null, `${name} stopped during legacy police trash cleanup`);
     });
     return function legacyInventory(sql, params) {

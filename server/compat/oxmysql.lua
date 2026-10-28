@@ -3,7 +3,7 @@
 -- `provide 'oxmysql'` in fxmanifest.lua satisfies other resources' dependency
 -- checks; it does NOT make exports.oxmysql:query() resolve here. Registering
 -- the underlying __cfx_export_oxmysql_<name> event does -- the same identity
--- hijack qbtarget/client/compat/ox-target.lua uses. provideExport is duplicated
+-- hijack kora_target/client/compat/ox-target.lua uses. provideExport is duplicated
 -- per compat file because separate Lua chunks can't share a local (a
 -- constraint this codebase documents repeatedly).
 
@@ -34,12 +34,12 @@ local function warnSyncOnce(resource)
         .. 'server thread. Migrate to QB.sql.* or the callback form.'):format(resource))
 end
 
--- THE ATTRIBUTION HANDOFF. qbtarget's rule is "call the impl directly so
+-- THE ATTRIBUTION HANDOFF. kora_target's rule is "call the impl directly so
 -- GetInvokingResource() resolves to the real consumer." Here the impl lives in
 -- the JS runtime, so a Lua shim MUST cross the boundary -- and JS would then see
--- `qbsql` as the invoker. Fix: capture GetInvokingResource() HERE, at call time
+-- `kora_sql` as the invoker. Fix: capture GetInvokingResource() HERE, at call time
 -- (it correctly resolves to the real caller because this function object belongs
--- to qbsql's VM but runs in the caller's invocation context), and forward it as
+-- to kora_sql's VM but runs in the caller's invocation context), and forward it as
 -- the trailing `invokingResource` argument the JS dataExport wrapper peels off.
 --
 -- `params` is always normalised to a table before crossing, because the JS
@@ -48,7 +48,7 @@ local function asyncCall(jsName)
     return function(query, params, cb)
         if isCallable(params) and cb == nil then cb, params = params, nil end
         local resource = GetInvokingResource() or GetCurrentResourceName()
-        exports.qbsql[jsName](exports.qbsql, query, params or {}, cb, resource)
+        exports.kora_sql[jsName](exports.kora_sql, query, params or {}, cb, resource)
     end
 end
 
@@ -60,7 +60,7 @@ local function syncCall(jsName)
         local resource = GetInvokingResource() or GetCurrentResourceName()
         warnSyncOnce(resource)
         local p = promise.new()
-        exports.qbsql[jsName](exports.qbsql, query, params or {}, function(result, err)
+        exports.kora_sql[jsName](exports.kora_sql, query, params or {}, function(result, err)
             if err then p:reject(err) else p:resolve(result) end
         end, resource)
         local ok, res = pcall(Citizen.Await, p)
@@ -108,8 +108,8 @@ local function guarded(fn)
 end
 
 -- Current oxmysql's store compatibility export returns the SQL string itself;
--- rawExecute accepts strings, so retain that exact observable contract. qbsql's
--- own numeric store handles remain available through exports.qbsql:store.
+-- rawExecute accepts strings, so retain that exact observable contract. kora_sql's
+-- own numeric store handles remain available through exports.kora_sql:store.
 local function store(query, cb)
     if isCallable(cb) then cb(query) end
     return query
@@ -118,22 +118,22 @@ end
 local function rawExecute(handle, params, cb)
     if isCallable(params) and cb == nil then cb, params = params, nil end
     local resource = GetInvokingResource() or GetCurrentResourceName()
-    return exports.qbsql:rawExecute(handle, params or {}, cb, resource)
+    return exports.kora_sql:rawExecute(handle, params or {}, cb, resource)
 end
 
 local function isReady()
-    return exports.qbsql:isReady()
+    return exports.kora_sql:isReady()
 end
 
 local function awaitConnection()
-    while not exports.qbsql:isReady() do Wait(0) end
+    while not exports.kora_sql:isReady() do Wait(0) end
     return true
 end
 
 local function startTransaction(callback)
     assert(isCallable(callback), 'startTransaction requires a callback')
     local resource = GetInvokingResource() or GetCurrentResourceName()
-    return exports.qbsql:startTransaction(callback, resource)
+    return exports.kora_sql:startTransaction(callback, resource)
 end
 
 -- These are the two exports oxmysql consumers commonly use while booting:
@@ -162,13 +162,13 @@ end
 registrations.transaction = function(queries, params, cb)
     if isCallable(params) and cb == nil then cb, params = params, nil end
     local resource = GetInvokingResource() or GetCurrentResourceName()
-    exports.qbsql:transaction(queries, params or {}, cb, resource)
+    exports.kora_sql:transaction(queries, params or {}, cb, resource)
 end
 registrations.transactionSync = function(queries, params)
     local resource = GetInvokingResource() or GetCurrentResourceName()
     warnSyncOnce(resource)
     local p = promise.new()
-    exports.qbsql:transaction(queries, params, function(result, err)
+    exports.kora_sql:transaction(queries, params, function(result, err)
         if err then p:reject(err) else p:resolve(result) end
     end, resource)
     local ok, res = pcall(Citizen.Await, p)

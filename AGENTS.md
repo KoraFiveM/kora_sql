@@ -1,4 +1,4 @@
-# qbsql agent guide
+# kora_sql agent guide
 
 ## What this is
 A high-throughput MySQL driver for FiveM, built to replace oxmysql. Node + mysql2
@@ -47,7 +47,7 @@ that promise so consumers resume without restarting once MySQL is reachable.
 FiveM's citizen `exports(name, fn)` registrar is the bare `exports` global **only
 in the resource entry file**. In a `require()`'d CommonJS sub-module, bare
 `exports` is `module.exports` and is not callable — which is why oxmysql bundles
-to a single file. qbsql follows that release model: esbuild emits
+to a single file. kora_sql follows that release model: esbuild emits
 `dist/build.js`, and `server/js/index.js` captures `globalThis.exports` before
 passing the registrar into `server/js/exports.js`. Never call bare
 `exports(...)` from a sub-module.
@@ -55,16 +55,16 @@ passing the registrar into `server/js/exports.js`. Never call bare
 ## Compat and attribution
 `server/compat/*.lua` register the foreign export surfaces via the
 `__cfx_export_<res>_<name>` identity hijack (same technique as
-`qbtarget/client/compat/ox-target.lua`). Because the real impl lives in the JS
+`kora_target/client/compat/ox-target.lua`). Because the real impl lives in the JS
 runtime, the Lua shim must cross the boundary — so it captures
 `GetInvokingResource()` **at call time** and forwards it as the trailing
 `invokingResource` argument, which the JS `dataExport` wrapper peels off and
-hands to `stats.js`. Without this, every slow query is attributed to `qbsql`.
+hands to `stats.js`. Without this, every slow query is attributed to `kora_sql`.
 `params` is always normalised to a table before crossing so the wrapper's
 trailing-argument peeling has a stable argument count.
 
 Current FXServer resolves `@oxmysql/lib/MySQL.lua` and
-`@mysql-async/lib/MySQL.lua` through qbsql's `provide` identities to the root
+`@mysql-async/lib/MySQL.lua` through kora_sql's `provide` identities to the root
 `lib/MySQL.lua`; the test server's untouched legacy manifests verify this at
 startup. Export identity still requires the manual handlers above. The
 `stubs/oxmysql/` and `stubs/mysql-async/` resources remain optional fallbacks
@@ -78,12 +78,12 @@ for older tooling/deployment scanners that require a literal directory.
 The first `*Sync` use per calling resource prints once, naming the resource.
 
 ## Migrations
-qbsql owns the runner (`server/js/migrate.js`); each resource owns its files. A
+kora_sql owns the runner (`server/js/migrate.js`); each resource owns its files. A
 checksum mismatch on an already-applied version is a **hard boot abort** — never
 a warning. `qbsql_migrations` and `qbsql_deadletter` are bootstrapped at boot.
 
 ## Build and distribution
-Like oxmysql, qbsql ships one server bundle containing mysql2. Run `yarn build`
+Like oxmysql, kora_sql ships one server bundle containing mysql2. Run `yarn build`
 after changing JS or dependencies and commit `dist/build.js`; FXServer does not
 need a yarn builder or runtime `node_modules`. Keep `yarn.lock` committed and
 `node_modules/` ignored. Source tests still run against the unbundled modules.

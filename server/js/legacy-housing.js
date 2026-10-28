@@ -46,14 +46,14 @@ function createLegacyHousingBridge({ getState, request, onStop }) {
     const pending = new Set();
     let selected = false;
     onStop((name) => {
-        if (name !== 'qbhousing' && name !== 'qbsql') return;
-        if (name === 'qbhousing') selected = true;
+        if (name !== 'kora_housing' && name !== 'kora_sql') return;
+        if (name === 'kora_housing') selected = true;
         for (const finish of [...pending]) finish(null, `${name} stopped during legacy housing read`);
     });
     return function legacyHousing(sql, params, resource) {
-        // This is the original export caller, supplied by qbsql, never a bind.
+        // This is the original export caller, supplied by kora_sql, never a bind.
         // The owner must read its archive during import before it becomes ready.
-        if (resource === 'qbhousing' || !touchesStockTables(sql)) return null;
+        if (resource === 'kora_housing' || !touchesStockTables(sql)) return null;
         const state = getState();
         if (state === 'started' || state === 'starting') selected = true;
         else if (!selected) return null;

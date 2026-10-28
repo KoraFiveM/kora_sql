@@ -1,7 +1,7 @@
 // Bind-parameter normalisation.
 //
 // Lua cannot store nil in a table, so an optional bind value leaves a gap.
-// Every boot, qbcore's garage insert for a job-fleet vehicle (no citizenid)
+// Every boot, kora_core's garage insert for a job-fleet vehicle (no citizenid)
 // produced "Bind parameters must not contain undefined" and the row was never
 // written, so it retried forever. normalizeParams is the choke point that makes
 // that shape impossible to reach mysql2.

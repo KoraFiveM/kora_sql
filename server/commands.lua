@@ -22,7 +22,7 @@ RegisterCommand('qbsql', function(source, args)
             if not Ready.await(5000) then print('^1[qbsql]^7 not ready') return end
             local started = GetGameTimer()
             local p = promise.new()
-            exports.qbsql:query('SELECT VERSION() AS v', {}, function(rows, err)
+            exports.kora_sql:query('SELECT VERSION() AS v', {}, function(rows, err)
                 if err then p:reject(err) else p:resolve(rows) end
             end, GetCurrentResourceName())
             local ok, rows = pcall(Citizen.Await, p)
@@ -35,7 +35,7 @@ RegisterCommand('qbsql', function(source, args)
         end)
 
     elseif sub == 'stats' then
-        local s = exports.qbsql:stats()
+        local s = exports.kora_sql:stats()
         print('^5[qbsql] stats^7')
         print(('  queries: %d total, %d errors, avg %sms, %d fingerprints')
             :format(s.queries.total, s.queries.errors, fmt(s.queries.avgMs), s.queries.distinctFingerprints))
@@ -49,7 +49,7 @@ RegisterCommand('qbsql', function(source, args)
 
     elseif sub == 'slow' then
         local limit = tonumber(args[2]) or 20
-        local rows = exports.qbsql:slowQueries(limit)
+        local rows = exports.kora_sql:slowQueries(limit)
         print(('^5[qbsql] %d slowest^7'):format(#rows))
         for _, r in ipairs(rows) do
             print(('  %sms [%s] %s'):format(fmt(r.ms), r.resource or '?', (r.sql or ''):sub(1, 90)))
@@ -57,13 +57,13 @@ RegisterCommand('qbsql', function(source, args)
 
     elseif sub == 'queue' then
         -- Depth is JS-side; expose via a tiny query on stats plus a direct call.
-        local s = exports.qbsql:stats()
+        local s = exports.kora_sql:stats()
         print('^5[qbsql] queue^7')
         print(('  crossings=%d rowsIn=%d rowsWritten=%d retries=%d deadLettered=%d')
             :format(s.queue.boundaryCrossings, s.queue.rowsEnqueued, s.queue.rowsWritten, s.queue.retries, s.queue.deadLettered))
 
     elseif sub == 'flush' then
-        exports.qbsql:flush(function(ok) print(ok and '^5[qbsql]^7 flushed' or '^1[qbsql]^7 flush failed') end)
+        exports.kora_sql:flush(function(ok) print(ok and '^5[qbsql]^7 flushed' or '^1[qbsql]^7 flush failed') end)
 
     elseif sub == 'bench' then
         local n = tonumber(args[2]) or 500
@@ -86,7 +86,7 @@ runBench = function(n)
         local args = { ... }
         args[#args + 1] = function(r, e) if e then p:reject(e) else p:resolve(r) end end
         args[#args + 1] = res
-        exports.qbsql[jsName](exports.qbsql, table.unpack(args))
+        exports.kora_sql[jsName](exports.kora_sql, table.unpack(args))
         local ok, r = pcall(Citizen.Await, p)
         return ok, r
     end
@@ -98,7 +98,7 @@ runBench = function(n)
     await('execute', 'TRUNCATE `qbsql_bench`', {})
 
     -- Path A: N individual upserts, each its own boundary crossing + round trip.
-    local statsBefore = exports.qbsql:stats()
+    local statsBefore = exports.kora_sql:stats()
     local a0 = GetGameTimer()
     for i = 1, n do
         await('execute',
@@ -112,13 +112,13 @@ runBench = function(n)
     local rows = {}
     for i = 1, n do rows[i] = { pk = ('b%d'):format(i), cols = { v = i } } end
     local b0 = GetGameTimer()
-    exports.qbsql:enqueueMany('qbsql_bench', 'id', rows, { mode = 'assign' })
+    exports.kora_sql:enqueueMany('qbsql_bench', 'id', rows, { mode = 'assign' })
     local p = promise.new()
-    exports.qbsql:flush('qbsql_bench', function(ok) p:resolve(ok) end)
+    exports.kora_sql:flush('qbsql_bench', function(ok) p:resolve(ok) end)
     pcall(Citizen.Await, p)
     local bMs = GetGameTimer() - b0
 
-    local statsAfter = exports.qbsql:stats()
+    local statsAfter = exports.kora_sql:stats()
     local crossingsB = statsAfter.queue.boundaryCrossings - statsBefore.queue.boundaryCrossings
 
     print(('^5[qbsql] bench results for n=%d^7'):format(n))

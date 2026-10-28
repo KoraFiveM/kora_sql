@@ -9,7 +9,7 @@ Config.compat = {
     oxmysql = true,            -- register the exports.oxmysql:* identity hijack
     mysqlAsync = true,         -- register exports['mysql-async']:* and the MySQL global
     ghmattimysql = true,       -- register exports.ghmattimysql:*
-    installMySQLGlobal = true, -- create the mysql-async `MySQL` global in a consumer VM that loads @qbsql/lib/MySQL.lua
+    installMySQLGlobal = true, -- create the mysql-async `MySQL` global in a consumer VM that loads @kora_sql/lib/MySQL.lua
     warnOnSync = true,         -- print once per calling resource when a blocking *Sync API is used
 }
 
@@ -18,7 +18,7 @@ Config.sql = {
     readyTimeout = 60000,      -- ms QB.sql.ready() waits for the pool before giving up
 }
 
--- Registers qbsql's Lua-side settings with qblib. Pool boot options remain
+-- Registers kora_sql's Lua-side settings with kora_lib. Pool boot options remain
 -- server convars because the Node host cannot read this Lua table.
 Config.compat.oxmysql = QB.config.boolean(Config.compat.oxmysql, { label = 'Support oxmysql scripts', advanced = false })
 Config.compat.mysqlAsync = QB.config.boolean(Config.compat.mysqlAsync, { label = 'Support mysql-async scripts', advanced = false })

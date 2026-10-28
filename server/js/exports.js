@@ -1,6 +1,6 @@
 // Public export surface, registered in one table-driven loop.
 //
-// Unlike qblib there is no `QB`-style namespace table to walk with a finalise
+// Unlike kora_lib there is no `QB`-style namespace table to walk with a finalise
 // step -- the surface is JS-side, so it is enumerated explicitly here. Every
 // data export takes a trailing `invokingResource` argument so the oxmysql/
 // mysql-async compat shims can forward the REAL caller (captured via
@@ -22,7 +22,7 @@
 
 const log = require('./logger');
 
-// A Lua resource can stop after it invokes an async export but before qbsql
+// A Lua resource can stop after it invokes an async export but before kora_sql
 // settles it. FiveM then throws when the stale function reference is called.
 // Never let that transport-level race become an unhandled Node rejection.
 function reply(name, cb, ...args) {
@@ -35,8 +35,8 @@ function reply(name, cb, ...args) {
 }
 
 // Wrap an async impl so it can be called two ways from Lua:
-//   * exports.qbsql:queryAsync(sql, params, cb, resource) -> cb(result, errString)
-//   * exports.qbsql:query(sql, params, resource)          -> returns a JS promise
+//   * exports.kora_sql:queryAsync(sql, params, cb, resource) -> cb(result, errString)
+//   * exports.kora_sql:query(sql, params, resource)          -> returns a JS promise
 //     (FiveM marshals a resolved promise back to a Citizen.Await on the Lua side)
 // The last argument is treated as `invokingResource` when it is a string, and as
 // a callback when it is callable.
@@ -176,7 +176,7 @@ function register(api, exports) {
     };
     exports('store', store);
     // oxmysql's compatibility store returns the SQL text unchanged. Keep
-    // qbsql's numeric handle store private to the qbsql identity.
+    // kora_sql's numeric handle store private to the kora_sql identity.
     provideForeign('oxmysql', 'store_async', (sql) => Promise.resolve(sql));
     const rawExecute = dataExport('rawExecute', (handle, params, resource) => {
         const sql = typeof handle === 'number' ? api.store.get(handle) : handle;

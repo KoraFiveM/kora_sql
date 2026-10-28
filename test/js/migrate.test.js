@@ -18,9 +18,9 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { Migrator, splitStatements } = require('../../server/js/migrate.js');
 
-// The exact shape that broke qbclothing v1: a `:word` inside a leading comment.
+// The exact shape that broke kora_clothing v1: a `:word` inside a leading comment.
 const SQL_WITH_COLON_IN_COMMENT = `
--- qbcore's own compat stub for
+-- kora_core's own compat stub for
 -- \`qb-multicharacter:server:getSkin\` already names this exact table.
 CREATE TABLE IF NOT EXISTS \`playerskins\` (
   \`citizenid\` VARCHAR(50) NOT NULL,
@@ -82,7 +82,7 @@ test('a `:word` inside a migration comment does not reach the named-placeholder 
     const { pools, executed } = fakePools();
     const migrator = new Migrator(pools);
 
-    await migrator.migrate('qbclothing', [
+    await migrator.migrate('kora_clothing', [
         { version: 1, name: 'playerskins_outfits', sql: SQL_WITH_COLON_IN_COMMENT, checksum: 'abc' },
     ]);
 
@@ -148,7 +148,7 @@ test('a non-idempotent DDL migration is rejected before execution', async () => 
 
 test('an atomic index replacement using IF EXISTS/IF NOT EXISTS is accepted', async () => {
     const { pools, executed } = fakePools();
-    await new Migrator(pools).migrate('qbcore', [
+    await new Migrator(pools).migrate('kora_core', [
         {
             version: 8,
             name: 'active_character_slots',
@@ -175,7 +175,7 @@ test('an already-applied migration with a changed checksum is a hard abort', asy
 
 test('an explicitly accepted legacy checksum permits a reviewed retry-safe rewrite', async () => {
     const { pools } = fakePools({ applied: [{ version: 3, checksum: 'legacy' }] });
-    const result = await new Migrator(pools).migrate('qbcore', [
+    const result = await new Migrator(pools).migrate('kora_core', [
         {
             version: 3,
             name: 'generated_columns',

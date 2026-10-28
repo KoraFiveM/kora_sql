@@ -2,35 +2,37 @@ fx_version 'cerulean'
 game 'gta5'
 lua54 'yes'
 
-name 'qbsql'
+name 'kora_sql'
+-- Keep the legacy resource name resolvable for exports['qbsql'] callers.
+provide 'qbsql'
 author 'Jamie'
 version '1.0.0'
 description 'High-throughput MySQL driver for FiveM with write coalescing and oxmysql/mysql-async compatibility'
 
-dependency 'qblib'
+dependency 'kora_lib'
 
 -- `provide` only satisfies ANOTHER resource's `dependency`/`dependencies`
 -- check. It does NOT make exports.oxmysql:query() resolve here -- that
 -- additionally requires registering the underlying __cfx_export_oxmysql_query
 -- event, which server/compat/oxmysql.lua does via its provideExport() helper
--- (same identity-hijack technique as qbtarget/client/compat/ox-target.lua).
+-- (same identity-hijack technique as kora_target/client/compat/ox-target.lua).
 provide 'oxmysql'
 provide 'mysql-async'
 provide 'ghmattimysql'
 
 files {
-    'init.lua',       -- '@qbsql/init.lua' -- installs QB.sql.* into a consumer VM
-    'lib/MySQL.lua'   -- '@qbsql/lib/MySQL.lua' -- the mysql-async/oxmysql `MySQL` global
+    'init.lua',       -- '@kora_sql/init.lua' -- installs QB.sql.* into a consumer VM
+    'lib/MySQL.lua'   -- '@kora_sql/lib/MySQL.lua' -- the mysql-async/oxmysql `MySQL` global
 }
 
 shared_scripts {
-    '@qblib/init.lua',
+    '@kora_lib/init.lua',
     'config.lua'
 }
 
 -- Load order here is deliberately NOT load-bearing, and that is the design
--- goal: the JS entry registers exports.qbsql:* at its own load time, and every
--- Lua file below resolves `exports.qbsql` LAZILY inside each call rather than
+-- goal: the JS entry registers exports.kora_sql:* at its own load time, and every
+-- Lua file below resolves `exports.kora_sql` LAZILY inside each call rather than
 -- caching a reference at load time. FXServer runs the Lua and Node hosts
 -- separately, so a load-time capture across that boundary is exactly the kind
 -- of thing that works on one build and breaks on the next. Listed explicitly

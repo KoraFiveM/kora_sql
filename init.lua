@@ -1,37 +1,37 @@
--- '@qbsql/init.lua' -- installs QB.sql.* into the CONSUMER's own Lua VM.
+-- '@kora_sql/init.lua' -- installs QB.sql.* into the CONSUMER's own Lua VM.
 --
 -- A consumer opts in with, in this order:
---     shared_script '@qblib/init.lua'
---     shared_script '@qbsql/init.lua'
+--     shared_script '@kora_lib/init.lua'
+--     shared_script '@kora_sql/init.lua'
 --
--- WHY THIS IS LEGAL: qblib/init.lua creates the global `QB` as a plain table
+-- WHY THIS IS LEGAL: kora_lib/init.lua creates the global `QB` as a plain table
 -- whose metatable has only __index (no __newindex). So `QB.sql = {...}` from a
--- later shared_script in the same VM is a plain rawset -- qblib's auto-vivifying
+-- later shared_script in the same VM is a plain rawset -- kora_lib's auto-vivifying
 -- __index never fires for `sql` again. We install real LOCAL functions here, in
 -- the caller's VM, so their promise.new()/Citizen.Await are same-VM: none of the
--- cross-resource promise-marshalling hazard that qblib's settleForExport exists
+-- cross-resource promise-marshalling hazard that kora_lib's settleForExport exists
 -- to work around applies.
 --
--- WHY NOT a qblib/modules/sql module: qblib is zero-dependency and every
+-- WHY NOT a kora_lib/modules/sql module: kora_lib is zero-dependency and every
 -- consumer loads it. Putting QB.sql there would invert the graph (library
--- depends on an application resource), and qblib's finalise exports
--- unconditionally -- so QB.sql.query would EXIST on servers not running qbsql
+-- depends on an application resource), and kora_lib's finalise exports
+-- unconditionally -- so QB.sql.query would EXIST on servers not running kora_sql
 -- and fail at runtime. This opt-in include is strictly safer.
 
-assert(QB, '@qbsql/init.lua must be loaded AFTER @qblib/init.lua (add its shared_script first).')
+assert(QB, '@kora_sql/init.lua must be loaded AFTER @kora_lib/init.lua (add its shared_script first).')
 
 QB.sql = QB.sql or {}
 
 -- Explicit SQL NULL. A Lua table cannot store nil, so an optional bind value
 -- written as `{a, nil, b}` reaches the JS driver either as a hole (mysql2:
 -- "Bind parameters must not contain undefined") or as an array truncated at the
--- gap -- which is how qbcore's garage insert failed on every boot for a
+-- gap -- which is how kora_core's garage insert failed on every boot for a
 -- job-fleet vehicle with no citizenid. Pass QB.sql.NULL for an intentionally
 -- null bind value; the JS side maps it back to null. Keep this literal in sync
 -- with NULL_SENTINEL in server/js/execute.js.
 QB.sql.NULL = '\0qbsql:null\0'
 
-local driver = exports.qbsql
+local driver = exports.kora_sql
 
 -- Run a JS export that returns a promise, and Await it on this coroutine.
 -- Returns (value, errorString). The JS `dataExport` wrapper returns a promise
@@ -62,9 +62,9 @@ end
 -- fallible-function convention (never throws across the call).
 function QB.sql.ready(timeoutMs)
     -- isReady is cheap and synchronous; poll it so a caller can gate on the pool.
-    if exports.qbsql:isReady() then return true end
+    if exports.kora_sql:isReady() then return true end
     local deadline = GetGameTimer() + (timeoutMs or (Config and Config.sql and Config.sql.readyTimeout) or 60000)
-    while not exports.qbsql:isReady() do
+    while not exports.kora_sql:isReady() do
         if GetGameTimer() > deadline then return false, 'qbsql not ready within timeout' end
         Wait(50)
     end
@@ -133,17 +133,17 @@ function QB.sql.migrateFiles(resource, migrations, checksumFn)
 
     return QB.sql.migrate(resource, prepared)
 end
-function QB.sql.stats()               return exports.qbsql:stats() end
+function QB.sql.stats()               return exports.kora_sql:stats() end
 
 -- The FIRE-AND-FORGET path. These NEVER yield -- they hand rows to the JS queue
--- and return immediately. This is the hot save path for qbcore's persistence.
-function QB.sql.enqueue(table_, key, row, opts)      exports.qbsql:enqueue(table_, key, row, opts) end
-function QB.sql.enqueueMany(table_, key, rows, opts) exports.qbsql:enqueueMany(table_, key, rows, opts) end
+-- and return immediately. This is the hot save path for kora_core's persistence.
+function QB.sql.enqueue(table_, key, row, opts)      exports.kora_sql:enqueue(table_, key, row, opts) end
+function QB.sql.enqueueMany(table_, key, rows, opts) exports.kora_sql:enqueueMany(table_, key, rows, opts) end
 
 -- flush yields until the named table (or everything) has been drained.
 function QB.sql.flush(table_)
     local p = promise.new()
-    exports.qbsql:flush(table_, function(ok, err)
+    exports.kora_sql:flush(table_, function(ok, err)
         if ok then p:resolve(true) else p:reject(err or 'flush failed') end
     end)
     local ok, res = pcall(Citizen.Await, p)
@@ -155,7 +155,7 @@ end
 -- coroutine. cb(result, errorString).
 local function asyncVariant(name)
     return function(sql, params, cb)
-        exports.qbsql[name](exports.qbsql, sql, params, cb)
+        exports.kora_sql[name](exports.kora_sql, sql, params, cb)
     end
 end
 

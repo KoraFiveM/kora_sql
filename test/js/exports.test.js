@@ -1,6 +1,6 @@
 // Export readiness contract.
 //
-// FiveM registers JS exports before qbsql's asynchronous pool boot completes.
+// FiveM registers JS exports before kora_sql's asynchronous pool boot completes.
 // Legacy compatibility consumers can query immediately while loading, so the
 // export boundary itself must retain those calls until the driver is ready.
 

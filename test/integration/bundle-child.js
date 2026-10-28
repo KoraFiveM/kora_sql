@@ -9,7 +9,7 @@ const dsn = process.env.QBSQL_TEST_DSN;
 
 globalThis.exports = (name, fn) => registered.set(name, fn);
 globalThis.GetConvar = (name, fallback) => name === 'mysql_connection_string' ? dsn : fallback;
-globalThis.GetCurrentResourceName = () => 'qbsql';
+globalThis.GetCurrentResourceName = () => 'kora_sql';
 globalThis.GetInvokingResource = () => 'qbsql-bundle-smoke';
 globalThis.emit = () => {};
 globalThis.on = () => {};
