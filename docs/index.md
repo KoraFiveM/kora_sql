@@ -240,7 +240,7 @@ waits before rejecting), `Config.sql.readyTimeout` (60s, how long
 
 Part of the [qbcore2](https://github.com/qbcore2) resource set:
 
-- [qblib](https://qbcore2.github.io/kora_lib/) — shared helper library
+- [kora_lib](https://qbcore2.github.io/kora_lib/) — shared helper library
 - [qbcore](https://qbcore2.github.io/kora_core/) — framework core
 - [qbinventory](https://qbcore2.github.io/kora_inventory/) — headless inventory
 - [qbtarget](https://qbcore2.github.io/kora_target/) — targeting/interaction
