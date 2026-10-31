@@ -7,12 +7,12 @@ author 'Jamie'
 version '1.0.0'
 description 'Drop-in stub: forwards @mysql-async/lib/MySQL.lua includes to qbsql'
 
--- Optional fallback for older tooling/deployment scanners that insist on a
--- literal resource directory for third-party manifests containing
+-- Fallback for third-party manifests containing
 --   shared_script '@mysql-async/lib/MySQL.lua'
--- Current FXServer resolves that path through kora_sql's provided identity
--- directly, so normal servers do not need this stub. If required, copy this
--- folder into resources/ and ensure it after kora_sql. Do not run mysql-async too.
+-- An `@name/path` include needs a resource literally named `mysql-async`;
+-- `provide` alone is not relied on for it (see stubs/oxmysql/README.md). Copy this
+-- folder into resources/ and ensure it after kora_sql when a consumer needs it.
+-- Do not run mysql-async too.
 
 dependency 'kora_sql'
 
