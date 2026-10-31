@@ -4,15 +4,23 @@ lua54 'yes'
 
 name 'oxmysql'
 author 'Jamie'
-version '1.0.0'
-description 'Drop-in stub: forwards @oxmysql/lib/MySQL.lua includes to qbsql'
+-- GetResourceMetadata('oxmysql', 'version', 0) does NOT follow `provide`, so
+-- consumers that gate on it (ox_inventory: lib.checkDependency('oxmysql',
+-- '2.7.3')) read THIS value. 2.7.3 is the lowest version ox_inventory accepts;
+-- we claim exactly that, not the current oxmysql release, because the MySQL.*
+-- surface this placeholder forwards (query/single/scalar/insert/update/prepare/
+-- rawExecute/transaction/ready/startTransaction) is what kora_sql implements
+-- and what the tests pin. Bump deliberately, only after checking newer oxmysql
+-- additions against lib/MySQL.lua.
+version '2.7.3'
+description 'oxmysql compatibility placeholder (forwards to kora_sql), not affiliated with Overextended'
 
--- Optional fallback for older tooling/deployment scanners that insist on a
--- literal resource directory for third-party manifests containing
---   shared_script '@oxmysql/lib/MySQL.lua'
--- Current FXServer resolves that path through kora_sql's provided identity
--- directly, so normal servers do not need this stub. If required, copy this
--- folder into resources/ and ensure it after kora_sql. Do not run real oxmysql too.
+-- Real FXServer needs a resource literally named `oxmysql` for a consumer's
+-- `server_script '@oxmysql/lib/MySQL.lua'` (an `@name/path` include resolves by
+-- resource name; `provide` only satisfies dependency checks, ~90% confidence --
+-- verify on a scratch server, see README.md). Deploy this folder as
+-- resources/[compat]/oxmysql and ensure it AFTER kora_sql. Never run real
+-- oxmysql alongside it.
 
 dependency 'kora_sql'
 

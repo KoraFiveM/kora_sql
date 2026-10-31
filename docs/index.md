@@ -61,6 +61,11 @@ includes on current FXServer, so existing `@oxmysql/lib/MySQL.lua` and
 without edits. The two-file resources under `stubs/` remain optional fallbacks
 for older tooling or deployment systems that insist on a literal directory.
 
+For stock ox_inventory deploy `stubs/oxmysql` as `[compat]/oxmysql` (it declares
+`version '2.7.3'` for `lib.checkDependency`, which does not follow `provide`); see
+`stubs/oxmysql/README.md` for ensure order and the coexistence checks to run on a
+scratch server.
+
 ## Usage examples
 
 ### Query rows (modern API)
