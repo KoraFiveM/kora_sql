@@ -21,7 +21,7 @@ provide 'mysql-async'
 provide 'ghmattimysql'
 
 files {
-    'init.lua',       -- '@kora_sql/init.lua' -- installs QB.sql.* into a consumer VM
+    'init.lua',       -- '@kora_sql/init.lua' -- installs Kora.sql.* into a consumer VM
     'lib/MySQL.lua'   -- '@kora_sql/lib/MySQL.lua' -- the mysql-async/oxmysql `MySQL` global
 }
 

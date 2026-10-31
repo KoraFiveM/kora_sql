@@ -14,20 +14,20 @@ Config.compat = {
 }
 
 Config.sql = {
-    awaitTimeout = 30000,      -- ms QB.sql.* waits for a query before rejecting
-    readyTimeout = 60000,      -- ms QB.sql.ready() waits for the pool before giving up
+    awaitTimeout = 30000,      -- ms Kora.sql.* waits for a query before rejecting
+    readyTimeout = 60000,      -- ms Kora.sql.ready() waits for the pool before giving up
 }
 
 -- Registers kora_sql's Lua-side settings with kora_lib. Pool boot options remain
 -- server convars because the Node host cannot read this Lua table.
-Config.compat.oxmysql = QB.config.boolean(Config.compat.oxmysql, { label = 'Support oxmysql scripts', advanced = false })
-Config.compat.mysqlAsync = QB.config.boolean(Config.compat.mysqlAsync, { label = 'Support mysql-async scripts', advanced = false })
-Config.compat.ghmattimysql = QB.config.boolean(Config.compat.ghmattimysql, { label = 'Support ghmattimysql scripts', advanced = false })
-Config.compat.installMySQLGlobal = QB.config.boolean(Config.compat.installMySQLGlobal, { label = 'Legacy MySQL global preference', advanced = true })
-Config.compat.warnOnSync = QB.config.boolean(Config.compat.warnOnSync, { label = 'Warn about blocking database calls', advanced = true })
-Config.sql.awaitTimeout = QB.config.integer(Config.sql.awaitTimeout, { label = 'Query wait preference (milliseconds)', advanced = true, min = 0 })
-Config.sql.readyTimeout = QB.config.integer(Config.sql.readyTimeout, { label = 'Database readiness wait preference (milliseconds)', advanced = true, min = 0 })
-Config = QB.config.adopt(Config, { descriptions = {
+Config.compat.oxmysql = Kora.config.boolean(Config.compat.oxmysql, { label = 'Support oxmysql scripts', advanced = false })
+Config.compat.mysqlAsync = Kora.config.boolean(Config.compat.mysqlAsync, { label = 'Support mysql-async scripts', advanced = false })
+Config.compat.ghmattimysql = Kora.config.boolean(Config.compat.ghmattimysql, { label = 'Support ghmattimysql scripts', advanced = false })
+Config.compat.installMySQLGlobal = Kora.config.boolean(Config.compat.installMySQLGlobal, { label = 'Legacy MySQL global preference', advanced = true })
+Config.compat.warnOnSync = Kora.config.boolean(Config.compat.warnOnSync, { label = 'Warn about blocking database calls', advanced = true })
+Config.sql.awaitTimeout = Kora.config.integer(Config.sql.awaitTimeout, { label = 'Query wait preference (milliseconds)', advanced = true, min = 0 })
+Config.sql.readyTimeout = Kora.config.integer(Config.sql.readyTimeout, { label = 'Database readiness wait preference (milliseconds)', advanced = true, min = 0 })
+Config = Kora.config.adopt(Config, { descriptions = {
     ['compat.oxmysql'] = 'Allow scripts using oxmysql database exports to use qbsql.',
     ['compat.mysqlAsync'] = 'Allow scripts using mysql-async database exports to use qbsql.',
     ['compat.ghmattimysql'] = 'Allow scripts using ghmattimysql database exports to use qbsql.',

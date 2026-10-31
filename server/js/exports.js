@@ -1,6 +1,6 @@
 // Public export surface, registered in one table-driven loop.
 //
-// Unlike kora_lib there is no `QB`-style namespace table to walk with a finalise
+// Unlike kora_lib there is no `Kora`-style namespace table to walk with a finalise
 // step -- the surface is JS-side, so it is enumerated explicitly here. Every
 // data export takes a trailing `invokingResource` argument so the oxmysql/
 // mysql-async compat shims can forward the REAL caller (captured via

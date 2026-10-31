@@ -10,7 +10,7 @@
 const { isUnpreparableError } = require('./statements');
 const log = require('./logger');
 
-// Keep in sync with QB.sql.NULL in ../../init.lua.
+// Keep in sync with Kora.sql.NULL in ../../init.lua.
 const NULL_SENTINEL = '\u0000qbsql:null\u0000';
 
 // Lua cannot store nil in a table, so an optional bind value leaves a gap.

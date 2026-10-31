@@ -1,6 +1,6 @@
 # kora_sql API reference
 
-Two ways to use qbsql: the modern `QB.sql.*` API (recommended for new code), and
+Two ways to use qbsql: the modern `Kora.sql.*` API (recommended for new code), and
 the drop-in `oxmysql` / `mysql-async` / `ghmattimysql` compat surfaces (existing
 code works unmodified).
 
@@ -35,7 +35,7 @@ network connection failures and holds database exports until it is ready. A
 server or resource restart is not required. Authentication, database-name, and
 other non-network configuration errors still fail immediately.
 
-## `QB.sql.*` (modern)
+## `Kora.sql.*` (modern)
 
 Add to your resource, in order:
 ```lua
@@ -43,35 +43,35 @@ shared_script '@kora_lib/init.lua'
 shared_script '@kora_sql/init.lua'
 ```
 
-### QB.sql.ready(timeoutMs?)
+### Kora.sql.ready(timeoutMs?)
 Yields until the pool is up. Returns `true`, or `false, errString` on timeout.
 
-### QB.sql.query(sql, params) -> rows[] | nil, errString
+### Kora.sql.query(sql, params) -> rows[] | nil, errString
 Yields. Returns an array of row tables.
 ```lua
-local rows = QB.sql.query('SELECT * FROM players WHERE license = ?', { license })
+local rows = Kora.sql.query('SELECT * FROM players WHERE license = ?', { license })
 ```
 
-### QB.sql.single(sql, params) -> row | nil
+### Kora.sql.single(sql, params) -> row | nil
 First row only (or `nil`).
 
-### QB.sql.scalar(sql, params) -> value | nil
+### Kora.sql.scalar(sql, params) -> value | nil
 First column of the first row.
 
-### QB.sql.execute(sql, params) -> { affectedRows, insertId, changedRows }
+### Kora.sql.execute(sql, params) -> { affectedRows, insertId, changedRows }
 For writes.
 
-### QB.sql.insert(sql, params) -> insertId
-### QB.sql.update(sql, params) -> affectedRows
+### Kora.sql.insert(sql, params) -> insertId
+### Kora.sql.update(sql, params) -> affectedRows
 
-### QB.sql.batch(statements) -> results[]
+### Kora.sql.batch(statements) -> results[]
 `statements` = `{ {sql=, params=}, ... }`. One pinned connection, NO transaction.
 
-### QB.sql.transaction(statements) -> boolean, errString
+### Kora.sql.transaction(statements) -> boolean, errString
 Same, wrapped in BEGIN/COMMIT; rolls back on any error. Also accepts the oxmysql
-"one query, many param sets" form: `QB.sql.transaction(sql, { {p1}, {p2}, ... })`.
+"one query, many param sets" form: `Kora.sql.transaction(sql, { {p1}, {p2}, ... })`.
 
-### QB.sql.transactionChecked(statements, operation?) -> outcome, errString
+### Kora.sql.transactionChecked(statements, operation?) -> outcome, errString
 Runs on one connection and checks each statement before COMMIT. A statement may
 set `expectedRows` (write affected rows or SELECT row count) and `failureCode`.
 A mismatch rolls back every statement. Success is `{success=true, results={...}}`;
@@ -85,24 +85,24 @@ in-flight worker with identical terms. It is an in-memory restart bridge for a
 consumer resource, not a durable idempotency store. The consumer must write its
 unique operation receipt in the same transaction as its mutations.
 
-### QB.sql.awaitCheckedOperation(key, fingerprint?) -> state, errString
+### Kora.sql.awaitCheckedOperation(key, fingerprint?) -> state, errString
 Joins an existing checked worker without submitting SQL. Returns `{active=false}`
 when none exists, otherwise `{active=true, result=outcome}` after it settles.
 Mismatched terms return an indeterminate result. After a consumer restart, wait
 here before reading a pending receipt or releasing its persistent player fence.
-`QB.sql.awaitCheckedOperations(prefix)` waits for all currently active checked
+`Kora.sql.awaitCheckedOperations(prefix)` waits for all currently active checked
 workers matching a key prefix and returns `{settled=count}`. Use it once before
 loading a restarted consumer's caches; it never executes replacement SQL.
 The server export `hasActivePlayerOperation(citizenid)` is a synchronous lifecycle
 guard; it reports active checked workers declaring that character ID.
 
-### QB.sql.enqueue(table, conflictKey, row, opts) — FIRE AND FORGET
+### Kora.sql.enqueue(table, conflictKey, row, opts) — FIRE AND FORGET
 Never yields. Hands one `{ pk, cols }` row to the coalescing queue.
 ```lua
-QB.sql.enqueue('players', 'citizenid', { pk = cid, cols = { money = json } })
+Kora.sql.enqueue('players', 'citizenid', { pk = cid, cols = { money = json } })
 ```
 
-### QB.sql.enqueueMany(table, conflictKey, rows, opts) — FIRE AND FORGET
+### Kora.sql.enqueueMany(table, conflictKey, rows, opts) — FIRE AND FORGET
 Never yields. `rows` = `{ {pk=, cols={}}, ... }`. **One boundary crossing for N
 rows** — this is the hot save path.
 
@@ -115,24 +115,24 @@ rows** — this is the hot save path.
   avoids MariaDB validating those omitted columns as part of an INSERT.
 - `priority = 'immediate'`: flush this table now rather than on the interval.
 
-### QB.sql.flush(table?) -> boolean, errString
+### Kora.sql.flush(table?) -> boolean, errString
 Yields until the named table (or everything) has drained.
 
-### QB.sql.upsert(table, conflictKey, rows, opts) -> affectedRows
+### Kora.sql.upsert(table, conflictKey, rows, opts) -> affectedRows
 Immediate awaited batched upsert (enqueueMany + flush in one call).
 
-### QB.sql.migrate(resource, migrations) -> boolean, errString
+### Kora.sql.migrate(resource, migrations) -> boolean, errString
 `migrations` = `{ {version=, name=, sql=, checksum=}, ... }`. A checksum mismatch
 on an already-applied version aborts. See kora_core's `sql/` for the pattern.
 
-### QB.sql.migrateFiles(resource, migrations, checksumFn?) -> boolean, errString
+### Kora.sql.migrateFiles(resource, migrations, checksumFn?) -> boolean, errString
 Loads `{version=, name=, file=}` entries with `LoadResourceFile`, calculates
 their checksums, and forwards them to `migrate`. `checksumFn` defaults to
-`QB.util.fnv1a`; pass the resource's historical checksum function when an
+`Kora.util.fnv1a`; pass the resource's historical checksum function when an
 existing migration used another format.
 
 ### Callback variants
-`QB.sql.queryAsync(sql, params, cb)` and friends — `cb(result, errString)`, no
+`Kora.sql.queryAsync(sql, params, cb)` and friends — `cb(result, errString)`, no
 coroutine required.
 
 ## oxmysql compat

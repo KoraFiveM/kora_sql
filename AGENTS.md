@@ -2,7 +2,7 @@
 
 ## What this is
 A high-throughput MySQL driver for FiveM, built to replace oxmysql. Node + mysql2
-on the server; a thin Lua surface (`QB.sql.*`) plus full drop-in compatibility
+on the server; a thin Lua surface (`Kora.sql.*`) plus full drop-in compatibility
 with `oxmysql`, `mysql-async`, and `ghmattimysql`. The performance thesis is
 **architectural, not "mysql2 is fast"** — see below.
 

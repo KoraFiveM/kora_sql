@@ -31,7 +31,7 @@ local function warnSyncOnce(resource)
     if not (Config.compat.warnOnSync) or warnedSync[resource] then return end
     warnedSync[resource] = true
     print(('^3[qbsql:oxmysql-bridge]^7 \'%s\' is using the blocking Sync SQL API, which stalls the '
-        .. 'server thread. Migrate to QB.sql.* or the callback form.'):format(resource))
+        .. 'server thread. Migrate to Kora.sql.* or the callback form.'):format(resource))
 end
 
 -- THE ATTRIBUTION HANDOFF. kora_target's rule is "call the impl directly so
