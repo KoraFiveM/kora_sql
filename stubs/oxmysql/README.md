@@ -25,30 +25,29 @@ before anything that includes `@oxmysql/lib/MySQL.lua`. **Real oxmysql must not 
 alongside it** (two `oxmysql` resources cannot coexist, and real oxmysql would also
 fight kora_sql over the `__cfx_export_oxmysql_*` handlers).
 
+## When it is needed
+
+kora_sql does **not** `provide 'oxmysql'`; this placeholder alone owns the name.
+(Both claiming it meant `stop oxmysql` also stopped kora_sql, and after `restart
+kora_sql` the name resolved to kora_sql, so ox_inventory saw version 1.0.0 instead of
+2.7.3.) Resources that declare `dependency 'oxmysql'`, include
+`@oxmysql/lib/MySQL.lua` or call `lib.checkDependency('oxmysql', '2.7.3')` need this
+placeholder ensured after kora_sql. `exports.oxmysql:*` works without it, served by
+kora_sql's `__cfx_export_oxmysql_*` handlers.
+
 ## Version
 
-`version '2.7.3'` is the minimum ox_inventory accepts. `GetResourceMetadata` does not
-follow `provide`, so the placeholder must declare it itself.
+`version '2.7.3'` is the minimum ox_inventory accepts; `GetResourceMetadata` reads it
+from this manifest.
 
-## Coexistence with kora_sql's `provide 'oxmysql'`
+## Scratch-server checks
 
-kora_sql keeps `provide 'oxmysql'`. With a real resource also named `oxmysql`, the
-expected behaviour is that the real-named resource wins for `@oxmysql/...` includes,
-`GetResourceState('oxmysql')` and `GetResourceMetadata('oxmysql', ...)`, while `provide`
-still satisfies `dependency 'oxmysql'` for resources that do not look at the name.
-This is unverified (about 90% confidence). Risks to check on a **scratch server**:
-
-1. `ensure oxmysql` starts the placeholder (not "resource not found" or a conflict with
-   the provided name) and `oxmysql` shows `started` in `resources`.
+1. `ensure oxmysql` starts the placeholder and `oxmysql` shows `started` in `resources`.
 2. A consumer with `server_script '@oxmysql/lib/MySQL.lua'` loads and
-   `MySQL.query.await('SELECT 1')` works (the file resolves from this folder).
-3. `exports.oxmysql:query(...)` still reaches kora_sql (kora_sql's export hijack
-   answers; the placeholder has no exports to shadow it).
-4. Stopping or restarting the placeholder does not stop kora_sql, and restarting
-   kora_sql restarts the placeholder (dependency) without leaving ox_inventory stale.
-5. `GetResourceMetadata('oxmysql', 'version', 0)` returns `2.7.3`.
-6. No "multiple resources provide/are named oxmysql" error at boot. If there is one, the
-   fallback is to drop `provide 'oxmysql'` from kora_sql's manifest (not done here).
+   `MySQL.query.await('SELECT 1')` works.
+3. `exports.oxmysql:query(...)` reaches kora_sql, with and without the placeholder.
+4. `stop oxmysql` does not stop kora_sql; `restart kora_sql` restarts the placeholder
+   (dependency) and `GetResourceMetadata('oxmysql', 'version', 0)` still returns `2.7.3`.
 
 ## Semantics ox_inventory relies on
 

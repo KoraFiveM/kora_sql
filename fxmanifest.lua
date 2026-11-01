@@ -16,7 +16,9 @@ dependency 'kora_lib'
 -- additionally requires registering the underlying __cfx_export_oxmysql_query
 -- event, which server/compat/oxmysql.lua does via its provideExport() helper
 -- (same identity-hijack technique as kora_target/client/compat/ox-target.lua).
-provide 'oxmysql'
+-- 'oxmysql' is deliberately NOT provided: the stubs/oxmysql placeholder owns that
+-- name. Providing it too made `stop oxmysql` stop kora_sql, and after
+-- `restart kora_sql` the name resolved to kora_sql (version 1.0.0).
 provide 'mysql-async'
 provide 'ghmattimysql'
 
