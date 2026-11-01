@@ -10,7 +10,6 @@ local runBench
 local function fmt(n) return ('%.2f'):format(n or 0) end
 
 RegisterCommand('qbsql', function(source, args)
-    -- Console (source 0) is always allowed; players need the ace.
     if source ~= 0 and not IsPlayerAceAllowed(source, 'command.qbsql') then
         return
     end

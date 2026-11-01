@@ -133,7 +133,6 @@ function register(api, exports) {
             .catch((err) => log.error('exports', `${name} failed before qbsql became ready: ${err.message}`));
     }
 
-    // --- readiness / version ---
     const isReady = () => api.isReady();
     exports('isReady', isReady);
     exports('version', () => api.version());
@@ -147,7 +146,6 @@ function register(api, exports) {
         api.ready().then(() => reply('awaitReady', cb, true, null)).catch((e) => reply('awaitReady', cb, false, String(e.message)));
     });
 
-    // --- core data path ---
     const query = dataExport('query', (sql, params, resource) => api.executor.query(sql, params, resource));
     const single = dataExport('single', (sql, params, resource) => api.executor.single(sql, params, resource));
     const scalar = dataExport('scalar', (sql, params, resource) => api.executor.scalar(sql, params, resource));
@@ -180,7 +178,6 @@ function register(api, exports) {
     oxAsync('update', oxUpdate);
     oxAsync('prepare', oxPrepare);
 
-    // --- transaction / batch ---
     const transaction = dataExport('transaction', (queries, params, resource) => api.txn.transaction(queries, params, resource));
     dataExport('transactionChecked', (queries, operation, resource) => api.txn.transactionChecked(queries, operation));
     dataExport('awaitCheckedOperation', (key, fingerprint, resource) => api.txn.awaitCheckedOperation(key, fingerprint));
@@ -227,7 +224,6 @@ function register(api, exports) {
     exports('startTransaction', startTransaction);
     provideForeign('oxmysql', 'startTransaction_async', startTransaction);
 
-    // --- the coalescing write path ---
     exports('enqueue', (table, key, row, opts) => {
         enqueueWhenReady('enqueue', () => api.queue.enqueue(table, key, row, opts));
     });
@@ -248,11 +244,9 @@ function register(api, exports) {
             .catch((e) => reply('flush', cb, false, String(e.message)));
     });
 
-    // --- migrations ---
     dataExport('migrate', (resource, migrations) => api.migrator.migrate(resource, migrations));
     dataExport('prepareWarm', (sqlList) => api.prepareWarm(sqlList));
 
-    // --- observability ---
     exports('stats', (cb) => { const s = api.stats.summary(api.statements.summary()); if (cb) cb(s); return s; });
     exports('slowQueries', (limit, cb) => { const s = api.stats.slowQueries(limit); if (cb) cb(s); return s; });
     exports('resetStats', () => api.stats.reset());

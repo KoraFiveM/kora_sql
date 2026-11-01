@@ -56,10 +56,6 @@ const api = {
         let warmed = 0;
         for (const sql of sqlList || []) {
             try {
-                // EXPLAIN prepares without mutating -- but not all statements
-                // EXPLAIN cleanly, so just run a prepare via execute against a
-                // rollback-safe no-op is overkill. Simplest: record it in the
-                // LRU as preparable; the first real call primes mysql2.
                 this.statements.touch(sql);
                 warmed++;
             } catch (_) { /* ignore */ }

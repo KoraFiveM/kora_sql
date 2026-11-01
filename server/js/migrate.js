@@ -69,7 +69,6 @@ class Migrator {
     async migrate(resource, migrations) {
         await this._bootstrap();
 
-        // Load what's already applied for this resource.
         const [applied] = await this.pools.write.query(
             'SELECT `version`, `checksum` FROM `qbsql_migrations` WHERE `resource` = ?',
             [resource]
