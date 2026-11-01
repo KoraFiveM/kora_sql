@@ -55,11 +55,17 @@ set qbsql_allow_multiple_statements false
 set qbsql_debug false
 ```
 
-The provided `oxmysql` and `mysql-async` identities also resolve resource-file
-includes on current FXServer, so existing `@oxmysql/lib/MySQL.lua` and
-`@mysql-async/lib/MySQL.lua` manifest entries load kora_sql's `lib/MySQL.lua`
-without edits. The two-file resources under `stubs/` remain optional fallbacks
-for older tooling or deployment systems that insist on a literal directory.
+The provided `oxmysql` and `mysql-async` identities satisfy `dependency` checks and
+serve `exports.oxmysql:*` / `exports['mysql-async']:*`, but `provide` is not relied on
+for `@oxmysql/lib/MySQL.lua` includes or version checks.
+
+Stock ox_inventory **requires** the placeholder: deploy `stubs/oxmysql` as
+`[compat]/oxmysql`, ensured after kora_sql and before ox_lib/ox_inventory. It declares
+`version '2.7.3'` (`lib.checkDependency` does not follow `provide`) and ships
+`lib/MySQL.lua`. Real oxmysql must not run alongside it. kora_sql's `provide 'oxmysql'`
+is kept; its coexistence with a resource of the same name is unverified, so see
+`stubs/oxmysql/README.md` for the checks to run on a scratch server. `stubs/mysql-async`
+is the equivalent fallback for `@mysql-async/` includes.
 
 ## Usage examples
 

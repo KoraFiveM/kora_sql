@@ -3,10 +3,10 @@
 -- MySQL global in the consumer's VM. Keeping this a pure forward means there is
 -- one implementation to maintain (kora_sql/lib/MySQL.lua), not two.
 --
--- We cannot `shared_script '@kora_sql/lib/MySQL.lua'` from HERE (that would run it
--- in the stub's VM, not the consumer's). Instead the consumer that included us
--- gets kora_sql's file loaded into ITS VM via the load below.
+-- This file already runs in the consumer's VM (it was included by the consumer's
+-- manifest), so GetCurrentResourceName() inside kora_sql's file is the consumer,
+-- which keeps slow-query attribution correct. We just load kora_sql's source here.
 local chunk = LoadResourceFile('kora_sql', 'lib/MySQL.lua')
-assert(chunk, '[oxmysql-stub] could not read qbsql/lib/MySQL.lua -- is kora_sql present?')
+assert(chunk, '[oxmysql-stub] could not read kora_sql/lib/MySQL.lua -- is kora_sql present?')
 local fn = assert(load(chunk, '@kora_sql/lib/MySQL.lua'))
 fn()

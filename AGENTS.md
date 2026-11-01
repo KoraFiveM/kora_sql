@@ -63,12 +63,18 @@ hands to `stats.js`. Without this, every slow query is attributed to `kora_sql`.
 `params` is always normalised to a table before crossing so the wrapper's
 trailing-argument peeling has a stable argument count.
 
-Current FXServer resolves `@oxmysql/lib/MySQL.lua` and
-`@mysql-async/lib/MySQL.lua` through kora_sql's `provide` identities to the root
-`lib/MySQL.lua`; the test server's untouched legacy manifests verify this at
-startup. Export identity still requires the manual handlers above. The
-`stubs/oxmysql/` and `stubs/mysql-async/` resources remain optional fallbacks
-for older tooling/deployment scanners that require a literal directory.
+`provide` only satisfies another resource's `dependency` check; it does not
+reliably make `@oxmysql/lib/MySQL.lua` resolve, and it never feeds
+`GetResourceMetadata('oxmysql', 'version')` (so `lib.checkDependency('oxmysql',
+'2.7.3')` fails). Stock ox_inventory therefore REQUIRES the placeholder resource
+`stubs/oxmysql/`, deployed as `[compat]/oxmysql` (version 2.7.3, ensured after
+kora_sql; real oxmysql must not run). Some FXServer builds may also resolve
+`@oxmysql/...` through kora_sql's `provide` (unverified, ~10%); the placeholder is the
+supported path. kora_sql keeps `provide 'oxmysql'`; its coexistence with a real
+resource of that name is unverified, so see `stubs/oxmysql/README.md` for the
+scratch-server checklist. `stubs/mysql-async/` is the same kind of fallback for
+`@mysql-async/` includes (only needed if a consumer includes that path). Export
+identity always requires the manual handlers above.
 
 ## Refused, loudly
 - Multi-statement queries (`multipleStatements: false`; config-gated escape hatch
