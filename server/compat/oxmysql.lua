@@ -29,7 +29,7 @@ local function isCallable(value)
 end
 
 local function warnSyncOnce(resource)
-    if not (Config.compat.warnOnSync) or warnedSync[resource] then return end
+    if not Config.compat.warnOnSync or warnedSync[resource] then return end
     warnedSync[resource] = true
     print(('^3[qbsql:oxmysql-bridge]^7 \'%s\' is using the blocking Sync SQL API, which stalls the '
         .. 'server thread. Migrate to Kora.sql.* or the callback form.'):format(resource))
@@ -181,9 +181,8 @@ local registrations = {
 }
 
 for _, name in ipairs(asyncNames) do
-    local jsName = name
-    registrations[name] = guarded(asyncCall(jsName))
-    registrations[name .. 'Sync'] = function(query, params) return syncCall(jsName)(query, params) end
+    registrations[name] = guarded(asyncCall(name))
+    registrations[name .. 'Sync'] = syncCall(name)
 end
 
 registrations.transaction = function(queries, params, cb)
@@ -213,7 +212,6 @@ registrations.rawExecuteSync = function(handle, params)
     return res
 end
 registrations.store = store
-registrations.prepareSync = registrations.prepareSync or syncCall('prepare')
 registrations.awaitConnection = awaitConnection
 registrations.awaitConnectionSync = awaitConnection
 registrations.isReadySync = isReady

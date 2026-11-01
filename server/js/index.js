@@ -124,7 +124,7 @@ async function boot() {
 // Bundlers execute this inside their own CommonJS wrapper, where bare
 // `exports` may be module.exports. Oxmysql solves the same problem by reading
 // the citizen registrar from the global object; prefer that path here too.
-const registerExport = (typeof globalThis !== 'undefined' && typeof globalThis.exports === 'function')
+const registerExport = (typeof globalThis.exports === 'function')
     ? globalThis.exports
     : (typeof exports === 'function' ? exports : null);
 
@@ -139,7 +139,7 @@ boot().catch((err) => {
     log.error('index', `FAILED TO START: ${err.message}`);
     log.error('index', err.stack || '');
     api._ready = false;
-    if (api._readyReject) api._readyReject(err);
+    api._readyReject(err);
 });
 
 // Flush everything on resource stop so an intentional restart doesn't drop the

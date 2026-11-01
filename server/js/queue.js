@@ -108,7 +108,7 @@ class WriteQueue {
     // Enqueue many rows in one call -- the single-boundary-crossing path.
     enqueueMany(table, conflictKey, rows, opts) {
         opts = opts || {};
-        this.stats.countCrossing(rows.length);
+        this.stats.countCrossing();
         for (const row of rows) {
             this.enqueue(table, conflictKey, row, opts);
         }
@@ -217,7 +217,7 @@ class WriteQueue {
                         }
                     );
                     try {
-                        await this._writeWithRetry(table, sql, params, chunk, st.mode, g.columns);
+                        await this._writeWithRetry(table, sql, params, chunk, st.mode);
                         statements++;
                         rowsWritten += rowCount;
                     } catch (err) {
@@ -263,7 +263,7 @@ class WriteQueue {
         }
     }
 
-    async _writeWithRetry(table, sql, params, chunk, mode, columns, attempt, reMerged) {
+    async _writeWithRetry(table, sql, params, chunk, mode, attempt, reMerged) {
         attempt = attempt || 0;
         try {
             await this.pools.write.execute(sql, normalizeWriteParams(params));
@@ -313,7 +313,7 @@ class WriteQueue {
             await new Promise((r) => setTimeout(r, backoff));
             // Rebuild from the (possibly merged) live set on the next flush;
             // here we retry the same chunk once more directly for promptness.
-            await this._writeWithRetry(table, sql, params, chunk, mode, columns, attempt + 1, reMerged);
+            await this._writeWithRetry(table, sql, params, chunk, mode, attempt + 1, reMerged);
         }
     }
 
