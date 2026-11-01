@@ -70,11 +70,8 @@ class Stats {
         if (q.flushDurationMs.length > 100) q.flushDurationMs.shift();
     }
 
-    countCrossing(rows) {
+    countCrossing() {
         this.queue.boundaryCrossings++;
-        // rowsEnqueued is counted at flush time from the actual snapshot so a
-        // row enqueued and then superseded before flush is not double-counted;
-        // here we only bump the crossing count.
     }
 
     slowQueries(limit) {

@@ -89,6 +89,14 @@ function normalizeNamedPlaceholders(sql, params) {
     return { sql: out, params: normalized };
 }
 
+// oxmysql's prepare/rawExecute accept one parameter list or an array of lists.
+function toParamSets(params) {
+    const normal = normalizeParams(params);
+    return Array.isArray(normal) && normal.length > 0 && normal.every(Array.isArray)
+        ? normal.map(normalizeParams)
+        : [normal];
+}
+
 class Executor {
     constructor(pools, statements, stats, legacyInventory = null, legacyHousing = null) {
         this.pools = pools;
@@ -129,8 +137,8 @@ class Executor {
 
     _query(pool, sql, params) {
         return this._oxTypeCast
-            ? pool.query({ sql, values: params || [], typeCast })
-            : pool.query(sql, params || []);
+            ? pool.query({ sql, values: params, typeCast })
+            : pool.query(sql, params);
     }
 
     // The one true executor. Returns mysql2's raw [rows|result, fields] pair.
@@ -154,8 +162,8 @@ class Executor {
             } else if (this.statements.isPreparable(sql)) {
                 try {
                     result = await (this._oxTypeCast
-                        ? pool.execute({ sql, values: params || [], typeCast: typeCastExecute })
-                        : pool.execute(sql, params || []));
+                        ? pool.execute({ sql, values: params, typeCast: typeCastExecute })
+                        : pool.execute(sql, params));
                     this.statements.recordHit(sql);
                 } catch (err) {
                     if (isUnpreparableError(err)) {
@@ -243,10 +251,7 @@ class Executor {
     // parameter lists, executes each set, and unpacks each response. This is
     // distinct from kora_sql's execute() OkPacket-shaped modern API.
     async prepare(sql, params, resource) {
-        const normal = normalizeParams(params);
-        const sets = Array.isArray(normal) && normal.length > 0 && normal.every(Array.isArray)
-            ? normal.map(normalizeParams)
-            : [normal];
+        const sets = toParamSets(params);
         const responses = [];
 
         for (const values of sets) {
@@ -270,10 +275,7 @@ class Executor {
     // [result, fields] transport pair. Multiple row/result sets are flattened
     // the same way upstream appends them to its response array.
     async rawExecute(sql, params, resource) {
-        const normal = normalizeParams(params);
-        const sets = Array.isArray(normal) && normal.length > 0 && normal.every(Array.isArray)
-            ? normal.map(normalizeParams)
-            : [normal];
+        const sets = toParamSets(params);
         const responses = [];
 
         for (const values of sets) {

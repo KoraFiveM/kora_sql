@@ -80,10 +80,7 @@ function build(table, conflictKey, columns, rows, opts) {
     const keyCols = Array.isArray(conflictKey) ? conflictKey : [conflictKey];
     const allCols = keyCols.concat(columns);
 
-    let effectiveRows = rows;
-    if (pad) {
-        effectiveRows = padRows(rows, bucketFor(rows.length));
-    }
+    const effectiveRows = pad ? padRows(rows, bucketFor(rows.length)) : rows;
 
     const placeholderGroup = '(' + allCols.map(() => '?').join(',') + ')';
     const valuesClause = new Array(effectiveRows.length).fill(placeholderGroup).join(',');
@@ -98,30 +95,12 @@ function build(table, conflictKey, columns, rows, opts) {
     // ON DUPLICATE KEY UPDATE assignments -- only the value columns, never the
     // key columns (updating a key column in an upsert is the corruption hazard
     // documented in the plan's schema section).
-    let updateClause;
-    let aliasClause = '';
-    if (dialect === 'alias') {
-        aliasClause = ' AS `new`';
-        if (mode === 'accumulate') {
-            updateClause = columns
-                .map((c) => `${quoteIdent(c)} = ${quoteIdent(c)} + \`new\`.${quoteIdent(c)}`)
-                .join(', ');
-        } else {
-            updateClause = columns
-                .map((c) => `${quoteIdent(c)} = \`new\`.${quoteIdent(c)}`)
-                .join(', ');
-        }
-    } else {
-        if (mode === 'accumulate') {
-            updateClause = columns
-                .map((c) => `${quoteIdent(c)} = ${quoteIdent(c)} + VALUES(${quoteIdent(c)})`)
-                .join(', ');
-        } else {
-            updateClause = columns
-                .map((c) => `${quoteIdent(c)} = VALUES(${quoteIdent(c)})`)
-                .join(', ');
-        }
-    }
+    const alias = dialect === 'alias';
+    const aliasClause = alias ? ' AS `new`' : '';
+    const incoming = (c) => (alias ? `\`new\`.${quoteIdent(c)}` : `VALUES(${quoteIdent(c)})`);
+    const updateClause = columns
+        .map((c) => `${quoteIdent(c)} = ${mode === 'accumulate' ? `${quoteIdent(c)} + ` : ''}${incoming(c)}`)
+        .join(', ');
 
     const colList = allCols.map(quoteIdent).join(',');
     const sql =

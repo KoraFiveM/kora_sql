@@ -14,12 +14,6 @@ function setDebug(on) {
     debugEnabled = !!on;
 }
 
-function ts() {
-    // No Date.now() concerns here (this is the JS runtime, not a workflow
-    // script) -- a wall-clock stamp helps correlate with MySQL's own log.
-    return new Date().toISOString();
-}
-
 module.exports = {
     setDebug,
     info(tag, msg) {
@@ -34,5 +28,4 @@ module.exports = {
     debug(tag, msg) {
         if (debugEnabled) console.log(`^8[qbsql:${tag}:debug]^7 ${msg}`);
     },
-    ts,
 };
