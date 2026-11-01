@@ -137,8 +137,8 @@ coroutine required.
 
 ## oxmysql compat
 
-The current oxmysql surface is available unmodified through the provided
-`oxmysql` identity: `query`, deprecated `execute`/`fetch`, `single`, `scalar`,
+The current oxmysql surface is available unmodified through the
+`exports.oxmysql` identity (no placeholder needed for exports): `query`, deprecated `execute`/`fetch`, `single`, `scalar`,
 `insert`, `update`, `prepare`, `transaction`, `rawExecute`, `store`, `isReady`,
 `awaitConnection`, and experimental `startTransaction`. Every `_async` promise
 export and every `*Sync` alias is registered too. Callback-as-second-argument,

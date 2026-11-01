@@ -1,9 +1,10 @@
 -- oxmysql drop-in compatibility.
 --
--- `provide 'oxmysql'` in fxmanifest.lua satisfies other resources' dependency
--- checks; it does NOT make exports.oxmysql:query() resolve here. Registering
--- the underlying __cfx_export_oxmysql_<name> event does -- the same identity
--- hijack kora_target/client/compat/ox-target.lua uses. provideExport is duplicated
+-- kora_sql does NOT `provide 'oxmysql'`; the stubs/oxmysql placeholder owns that
+-- name (needed for `dependency 'oxmysql'` and `@oxmysql/lib/MySQL.lua`). Registering
+-- the underlying __cfx_export_oxmysql_<name> event is what makes
+-- exports.oxmysql:query() resolve, with or without the placeholder -- the same
+-- identity hijack kora_target/client/compat/ox-target.lua uses. provideExport is duplicated
 -- per compat file because separate Lua chunks can't share a local (a
 -- constraint this codebase documents repeatedly).
 

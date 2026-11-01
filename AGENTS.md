@@ -63,16 +63,15 @@ hands to `stats.js`. Without this, every slow query is attributed to `kora_sql`.
 `params` is always normalised to a table before crossing so the wrapper's
 trailing-argument peeling has a stable argument count.
 
-`provide` only satisfies another resource's `dependency` check; it does not
-reliably make `@oxmysql/lib/MySQL.lua` resolve, and it never feeds
-`GetResourceMetadata('oxmysql', 'version')` (so `lib.checkDependency('oxmysql',
-'2.7.3')` fails). Stock ox_inventory therefore REQUIRES the placeholder resource
-`stubs/oxmysql/`, deployed as `[compat]/oxmysql` (version 2.7.3, ensured after
-kora_sql; real oxmysql must not run). Some FXServer builds may also resolve
-`@oxmysql/...` through kora_sql's `provide` (unverified, ~10%); the placeholder is the
-supported path. kora_sql keeps `provide 'oxmysql'`; its coexistence with a real
-resource of that name is unverified, so see `stubs/oxmysql/README.md` for the
-scratch-server checklist. `stubs/mysql-async/` is the same kind of fallback for
+kora_sql does NOT `provide 'oxmysql'`. Sharing the name with the placeholder made
+`stop oxmysql` stop kora_sql, and after `restart kora_sql` the name resolved to
+kora_sql (version 1.0.0), breaking ox_inventory's version check. The placeholder
+`stubs/oxmysql/` alone owns the name. Resources that declare `dependency 'oxmysql'`,
+include `@oxmysql/lib/MySQL.lua` or check `lib.checkDependency('oxmysql', '2.7.3')`
+(stock ox_inventory) REQUIRE it, deployed as `[compat]/oxmysql` (version 2.7.3,
+ensured after kora_sql; real oxmysql must not run). `exports.oxmysql:*` works
+without the placeholder (the manual `__cfx_export_oxmysql_*` handlers). `provide
+'mysql-async'`/`'ghmattimysql'` are kept. `stubs/mysql-async/` is the same kind of fallback for
 `@mysql-async/` includes (only needed if a consumer includes that path). Export
 identity always requires the manual handlers above.
 

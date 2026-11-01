@@ -55,16 +55,16 @@ set qbsql_allow_multiple_statements false
 set qbsql_debug false
 ```
 
-The provided `oxmysql` and `mysql-async` identities satisfy `dependency` checks and
-serve `exports.oxmysql:*` / `exports['mysql-async']:*`, but `provide` is not relied on
-for `@oxmysql/lib/MySQL.lua` includes or version checks.
+kora_sql serves `exports.oxmysql:*` / `exports['mysql-async']:*` itself, so those
+calls work with or without the placeholder. It does **not** `provide 'oxmysql'`.
+Any resource that declares `dependency 'oxmysql'`, includes `@oxmysql/lib/MySQL.lua`
+or checks the oxmysql version needs the `stubs/oxmysql` placeholder ensured after
+kora_sql.
 
 Stock ox_inventory **requires** the placeholder: deploy `stubs/oxmysql` as
 `[compat]/oxmysql`, ensured after kora_sql and before ox_lib/ox_inventory. It declares
-`version '2.7.3'` (`lib.checkDependency` does not follow `provide`) and ships
-`lib/MySQL.lua`. Real oxmysql must not run alongside it. kora_sql's `provide 'oxmysql'`
-is kept; its coexistence with a resource of the same name is unverified, so see
-`stubs/oxmysql/README.md` for the checks to run on a scratch server. `stubs/mysql-async`
+`version '2.7.3'` and ships `lib/MySQL.lua`. Real oxmysql must not run alongside it.
+See `stubs/oxmysql/README.md`. `stubs/mysql-async`
 is the equivalent fallback for `@mysql-async/` includes.
 
 ## Usage examples
@@ -122,8 +122,8 @@ end
 
 ### Migrating from oxmysql: same call signature, works unmodified
 ```lua
--- Existing oxmysql-era code. kora_sql `provide`s oxmysql and registers the same
--- __cfx_export_oxmysql_* identity, so this needs zero changes.
+-- Existing oxmysql-era code. kora_sql registers the same __cfx_export_oxmysql_*
+-- identity, so this needs zero changes (no placeholder required for exports).
 local rows = exports.oxmysql:query('SELECT * FROM players WHERE license = ?', { license })
 
 exports.oxmysql:insert('INSERT INTO logs (player, message) VALUES (?, ?)', { citizenid, message },

@@ -56,7 +56,15 @@ h.test('manifest: name oxmysql, version >= 2.7.3, kora_sql dependency, ships lib
     h.assertTrue(m:match("not affiliated with Overextended"), 'description')
     local a, b, c = m:match("\nversion '(%d+)%.(%d+)%.(%d+)'")
     a, b, c = tonumber(a), tonumber(b), tonumber(c)
+    h.assertTrue(a == 2 and b == 7 and c == 3, 'version is exactly 2.7.3')
     h.assertTrue(a and (a > 2 or (a == 2 and (b > 7 or (b == 7 and c >= 3)))), 'version >= 2.7.3')
+end)
+
+h.test('kora_sql manifest does not provide oxmysql (placeholder owns the name)', function()
+    local m = readFile('fxmanifest.lua')
+    h.assertTrue(not m:match("\nprovide%s+['\"]oxmysql['\"]"), 'must not provide oxmysql')
+    h.assertTrue(m:match("\nprovide 'mysql%-async'"), 'still provides mysql-async')
+    h.assertTrue(m:match("\nprovide 'ghmattimysql'"), 'still provides ghmattimysql')
 end)
 
 h.test('prepare.await: positional ? params, forwarded with consumer attribution', function()
