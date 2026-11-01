@@ -94,9 +94,19 @@ local function looksMultiStatement(query)
     return false
 end
 
+-- Same convar and truthy parsing as server/js/config.js getBoolConvar: only the
+-- literal strings 'true', '1' and 'yes' enable it; unset/anything else is off.
+-- Config.compat.allowMultipleStatements (never set by config.lua) can still force
+-- it on. Read per call so a runtime `set` is honoured; GetConvar is cheap.
+local function multipleStatementsAllowed()
+    if Config.compat.allowMultipleStatements then return true end
+    local raw = GetConvar('qbsql_allow_multiple_statements', '')
+    return raw == 'true' or raw == '1' or raw == 'yes'
+end
+
 local function guarded(fn)
     return function(query, params, cb)
-        if not (Config.compat.allowMultipleStatements) and looksMultiStatement(query) then
+        if not multipleStatementsAllowed() and looksMultiStatement(query) then
             local resource = GetInvokingResource() or GetCurrentResourceName()
             print(('^1[qbsql:oxmysql-bridge]^7 multi-statement query refused from \'%s\' -- split it, or set '
                 .. '`qbsql_allow_multiple_statements true` and accept the injection amplification. SQL: %s')
