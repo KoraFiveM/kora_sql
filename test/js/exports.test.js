@@ -111,7 +111,7 @@ test('oxmysql async aliases are genuine JS promise exports', async () => {
     try {
         const gate = deferred();
         const { api } = harness(gate);
-        api.executor = { query: async () => [{ value: 1 }] };
+        api.executor = { query: async () => [{ value: 1 }], withOxTypeCast() { return this; } };
         gate.resolve(true);
 
         for (const name of ['query_async', 'execute_async', 'fetch_async', 'rawExecute_async', 'store_async']) {

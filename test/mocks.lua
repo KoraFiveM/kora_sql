@@ -84,7 +84,16 @@ function M.install()
             return providedExports[resource .. '_' .. name]
         end,
         setInvokingResource = function(r) invokingResource = r end,
+        -- The oxmysql bridge calls the JS `ox*` variants (oxQuery, ...); lastCall(name)
+        -- matches either spelling, lastCallExact(name) only the literal export name.
         lastCall = function(name)
+            local ox = 'ox' .. name:sub(1, 1):upper() .. name:sub(2)
+            for i = #jsCalls, 1, -1 do
+                if jsCalls[i].name == name or jsCalls[i].name == ox then return jsCalls[i] end
+            end
+            return nil
+        end,
+        lastCallExact = function(name)
             for i = #jsCalls, 1, -1 do
                 if jsCalls[i].name == name then return jsCalls[i] end
             end

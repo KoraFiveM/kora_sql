@@ -19,7 +19,8 @@ dependency 'kora_lib'
 -- 'oxmysql' is deliberately NOT provided: the stubs/oxmysql placeholder owns that
 -- name. Providing it too made `stop oxmysql` stop kora_sql, and after
 -- `restart kora_sql` the name resolved to kora_sql (version 1.0.0).
-provide 'mysql-async'
+-- 'mysql-async' is deliberately NOT provided either: deploy stubs/mysql-async as
+-- resources/[compat]/mysql-async (it owns that name, like stubs/oxmysql owns oxmysql).
 provide 'ghmattimysql'
 
 files {

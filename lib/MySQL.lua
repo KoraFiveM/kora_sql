@@ -49,8 +49,16 @@ local function safeArgs(query, parameters, cb, transaction)
     return query, parameters, cb
 end
 
+-- This global is the oxmysql/mysql-async API, so it uses the JS `ox*` variants
+-- (oxmysql typeCast, gated by the `kora_sql_ox_typecast` convar). transaction
+-- and the rest have no variant and keep their own names.
+local oxName = {
+    query = 'oxQuery', single = 'oxSingle', scalar = 'oxScalar', insert = 'oxInsert',
+    update = 'oxUpdate', prepare = 'oxPrepare', rawExecute = 'oxRawExecute',
+}
+
 local function call(method, query, parameters, cb)
-    exports.kora_sql[method](exports.kora_sql, query, parameters or {}, function(result, err)
+    exports.kora_sql[oxName[method] or method](exports.kora_sql, query, parameters or {}, function(result, err)
         if not cb then return end
         if options.return_callback_errors then cb(result, err) else cb(result) end
     end, resourceName)
@@ -58,7 +66,7 @@ end
 
 local function await(method, query, parameters)
     local p = promise.new()
-    exports.kora_sql[method](exports.kora_sql, query, parameters or {}, function(result, err)
+    exports.kora_sql[oxName[method] or method](exports.kora_sql, query, parameters or {}, function(result, err)
         if err then return p:reject(err) end
         p:resolve(result)
     end, resourceName)

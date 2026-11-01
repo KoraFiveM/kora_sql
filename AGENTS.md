@@ -71,9 +71,20 @@ include `@oxmysql/lib/MySQL.lua` or check `lib.checkDependency('oxmysql', '2.7.3
 (stock ox_inventory) REQUIRE it, deployed as `[compat]/oxmysql` (version 2.7.3,
 ensured after kora_sql; real oxmysql must not run). `exports.oxmysql:*` works
 without the placeholder (the manual `__cfx_export_oxmysql_*` handlers). `provide
-'mysql-async'`/`'ghmattimysql'` are kept. `stubs/mysql-async/` is the same kind of fallback for
-`@mysql-async/` includes (only needed if a consumer includes that path). Export
-identity always requires the manual handlers above.
+'ghmattimysql'` is kept. kora_sql does NOT `provide 'mysql-async'` either:
+`stubs/mysql-async/` owns that name the same way. Deploy it as
+`resources/[compat]/mysql-async` (copy the folder), `ensure` it after kora_sql, for
+consumers with `dependency 'mysql-async'` or an `@mysql-async/lib/MySQL.lua` include;
+never run real mysql-async with it. Export identity always requires the manual handlers above.
+
+## oxmysql typeCast
+The oxmysql path (Lua bridge, `_async` exports, `lib/MySQL.lua`) calls the JS `ox*` export
+variants (`oxQuery`, `oxSingle`, `oxScalar`, `oxInsert`, `oxUpdate`, `oxPrepare`,
+`oxRawExecute`), which run `Executor.withOxTypeCast()` — a port of oxmysql's
+`typeCast.ts` in `server/js/typecast.js` (plus JSON-as-string for oxmysql's
+`jsonStrings`). Convar `kora_sql_ox_typecast` (default true) gates it; native exports and
+`Kora.sql.*` never convert. Keep the ox names in sync when adding an executor to the bridge.
+`dist/build.js` must be rebuilt (`yarn build`) after touching `server/js`.
 
 ## Refused, loudly
 - Multi-statement queries (`multipleStatements: false`; config-gated escape hatch

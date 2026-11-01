@@ -52,6 +52,12 @@ function register(api, exports) {
             while (args.length) {
                 const last = args[args.length - 1];
                 if (typeof last === 'function' && !cb) { cb = args.pop(); continue; }
+                // A Lua caller with no callback leaves a nil between params and
+                // the invoking resource ([sql, params, nil, 'res']); drop the
+                // hole so `resource` is still the argument impl receives last.
+                if ((last === null || last === undefined) && args.length > implArity(impl)) {
+                    args.pop(); continue;
+                }
                 if (typeof last === 'string' && resource === null && args.length > implArity(impl)) {
                     resource = args.pop(); continue;
                 }
@@ -150,14 +156,29 @@ function register(api, exports) {
     const update = dataExport('update', (sql, params, resource) => api.executor.update(sql, params, resource));
     const prepare = dataExport('prepare', (sql, params, resource) => api.executor.prepare(sql, params, resource));
 
-    oxAsync('query', query);
-    oxAsync('fetch', query);
-    oxAsync('execute', query);
-    oxAsync('single', single);
-    oxAsync('scalar', scalar);
-    oxAsync('insert', insert);
-    oxAsync('update', update);
-    oxAsync('prepare', prepare);
+    // oxmysql-flavoured variants (oxQuery, ...). Identical to the native
+    // exports except results go through oxmysql's typeCast when the
+    // `kora_sql_ox_typecast` convar (default true) is on. Used by the oxmysql
+    // Lua bridge, the oxmysql `_async` exports and lib/MySQL.lua; the native
+    // exports above never apply it.
+    const oxExec = () => (api.cfg && api.cfg.oxTypeCast === false
+        ? api.executor
+        : api.executor.withOxTypeCast());
+    const oxQuery = dataExport('oxQuery', (sql, params, resource) => oxExec().query(sql, params, resource));
+    const oxSingle = dataExport('oxSingle', (sql, params, resource) => oxExec().single(sql, params, resource));
+    const oxScalar = dataExport('oxScalar', (sql, params, resource) => oxExec().scalar(sql, params, resource));
+    const oxInsert = dataExport('oxInsert', (sql, params, resource) => oxExec().insert(sql, params, resource));
+    const oxUpdate = dataExport('oxUpdate', (sql, params, resource) => oxExec().update(sql, params, resource));
+    const oxPrepare = dataExport('oxPrepare', (sql, params, resource) => oxExec().prepare(sql, params, resource));
+
+    oxAsync('query', oxQuery);
+    oxAsync('fetch', oxQuery);
+    oxAsync('execute', oxQuery);
+    oxAsync('single', oxSingle);
+    oxAsync('scalar', oxScalar);
+    oxAsync('insert', oxInsert);
+    oxAsync('update', oxUpdate);
+    oxAsync('prepare', oxPrepare);
 
     // --- transaction / batch ---
     const transaction = dataExport('transaction', (queries, params, resource) => api.txn.transaction(queries, params, resource));
@@ -186,7 +207,15 @@ function register(api, exports) {
         }
         return api.executor.rawExecute(sql, params, resource);
     });
-    oxAsync('rawExecute', rawExecute);
+    const oxRawExecute = dataExport('oxRawExecute', (handle, params, resource) => {
+        const sql = typeof handle === 'number' ? api.store.get(handle) : handle;
+        if (typeof sql !== 'string') {
+            log.warn('exports', `oxRawExecute called with unknown store handle ${handle} -- did the resource restart?`);
+            return Promise.resolve(null);
+        }
+        return oxExec().rawExecute(sql, params, resource);
+    });
+    oxAsync('rawExecute', oxRawExecute);
 
     const startTransaction = function (callback, resource) {
         const p = Promise.resolve()

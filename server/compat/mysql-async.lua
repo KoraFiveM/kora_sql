@@ -33,6 +33,15 @@ registrations.mysql_transaction = function(queries, params, cb)
     exports.kora_sql:transaction(queries, params, cb, resource)
 end
 
+-- Stock mysql-async also exports mysql_store(query, cb) -> handle (consumed by
+-- MySQL.Sync/Async.store users via the raw export) and is_ready().
+registrations.mysql_store = function(query, cb)
+    return exports.kora_sql:store(query, cb)
+end
+registrations.is_ready = function()
+    return exports.kora_sql:isReady()
+end
+
 for exportName, func in pairs(registrations) do
     provideExport('mysql-async', exportName, func)
 end
