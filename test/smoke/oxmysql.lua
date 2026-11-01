@@ -7,6 +7,7 @@ local h = dofile('test/harness.lua')
 local mocks = dofile('test/mocks.lua')
 
 local handle = mocks.install()
+GetConvar = GetConvar or function(_, def) return def end
 
 -- The compat file guards on Config.compat.oxmysql; provide a Config.
 _G.Config = { compat = { oxmysql = true, warnOnSync = true, allowMultipleStatements = false } }

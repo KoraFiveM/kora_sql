@@ -162,4 +162,16 @@ h.test('stub reports a clear error when kora_sql is missing', function()
     h.assertTrue(tostring(err):find('kora_sql', 1, true))
 end)
 
+h.test('mysql-async stub: named mysql-async, depends on kora_sql, forwards to kora_sql lib', function()
+    local m = readFile('stubs/mysql-async/fxmanifest.lua')
+    h.assertTrue(m:match("name 'mysql%-async'"), 'name')
+    h.assertTrue(m:match("dependency 'kora_sql'"), 'dependency')
+    h.assertTrue(m:match("'lib/MySQL.lua'"), 'files')
+    reset(5)
+    MySQL = nil
+    dofile('stubs/mysql-async/lib/MySQL.lua')
+    h.assertEqual(MySQL.scalar.await('SELECT 5'), 5)
+    h.assertTrue(last('scalar') ~= nil, 'forwarded to kora_sql')
+end)
+
 h.report('oxmysql-placeholder')
