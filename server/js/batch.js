@@ -85,11 +85,9 @@ function build(table, conflictKey, columns, rows, opts) {
         effectiveRows = padRows(rows, bucketFor(rows.length));
     }
 
-    // One (?,?,...) group per row.
     const placeholderGroup = '(' + allCols.map(() => '?').join(',') + ')';
     const valuesClause = new Array(effectiveRows.length).fill(placeholderGroup).join(',');
 
-    // Flatten params in column order: key col(s) then value cols.
     const params = [];
     for (const row of effectiveRows) {
         const pkVals = Array.isArray(row.pk) ? row.pk : [row.pk];

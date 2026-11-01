@@ -16,7 +16,6 @@ class Stats {
         // fingerprint -> aggregate
         this.byFingerprint = new Map();
 
-        // Ring buffer of slow queries.
         this.slow = [];
         this.slowHead = 0;
 
@@ -79,7 +78,6 @@ class Stats {
     }
 
     slowQueries(limit) {
-        // Return newest-first.
         const ordered = this.slow.slice().sort((a, b) => b.at - a.at);
         return ordered.slice(0, limit || 20);
     }
