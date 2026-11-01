@@ -9,6 +9,7 @@
 
 const { isUnpreparableError } = require('./statements');
 const log = require('./logger');
+const { typeCast, typeCastExecute } = require('./typecast');
 
 // Keep in sync with Kora.sql.NULL in ../../init.lua.
 const NULL_SENTINEL = '\u0000qbsql:null\u0000';
@@ -97,6 +98,23 @@ class Executor {
         this.legacyHousing = legacyHousing;
     }
 
+    // A view of this executor whose queries apply oxmysql's typeCast (booleans,
+    // date-as-ms, binary blobs, JSON strings). Only the oxmysql compatibility
+    // export path uses it; the native executor's result shapes are unchanged.
+    // WARNING: the view is Object.create(this), so reads fall through to the
+    // base executor but any instance-field WRITE (this.x = ...) made while
+    // running on the view lands on the view and is invisible to the base (and
+    // vice versa for later replacement). Executor methods must mutate shared
+    // state only through objects (pools/statements/stats), never by assigning
+    // new values to fields on `this`.
+    withOxTypeCast() {
+        if (!this._oxView) {
+            this._oxView = Object.create(this);
+            this._oxView._oxTypeCast = true;
+        }
+        return this._oxView;
+    }
+
     // Choose the pool. Writes and anything ambiguous go to the write pool; only
     // statements that are unambiguously reads go to the read pool. A leading
     // SELECT or SHOW or WITH is the cheap, safe heuristic; a false negative
@@ -107,6 +125,12 @@ class Executor {
             return this.pools.read;
         }
         return this.pools.write;
+    }
+
+    _query(pool, sql, params) {
+        return this._oxTypeCast
+            ? pool.query({ sql, values: params || [], typeCast })
+            : pool.query(sql, params || []);
     }
 
     // The one true executor. Returns mysql2's raw [rows|result, fields] pair.
@@ -129,7 +153,9 @@ class Executor {
                 result = [await legacy, undefined];
             } else if (this.statements.isPreparable(sql)) {
                 try {
-                    result = await pool.execute(sql, params || []);
+                    result = await (this._oxTypeCast
+                        ? pool.execute({ sql, values: params || [], typeCast: typeCastExecute })
+                        : pool.execute(sql, params || []));
                     this.statements.recordHit(sql);
                 } catch (err) {
                     if (isUnpreparableError(err)) {
@@ -137,13 +163,13 @@ class Executor {
                         // unpreparable, then fall back to the text protocol.
                         this.statements.markUnpreparable(sql);
                         log.debug('execute', `unpreparable, falling back to query(): ${sql}`);
-                        result = await pool.query(sql, params || []);
+                        result = await this._query(pool, sql, params);
                     } else {
                         throw err;
                     }
                 }
             } else {
-                result = await pool.query(sql, params || []);
+                result = await this._query(pool, sql, params);
                 this.statements.recordMiss(sql);
             }
 

@@ -107,6 +107,8 @@ function load() {
         slowRing: getIntConvar('qbsql_slow_ring', 200),
         allowMultipleStatements: getBoolConvar('qbsql_allow_multiple_statements', false),
         connectRetryInterval: Math.max(250, getIntConvar('qbsql_connect_retry_interval', 2000)),
+        // oxmysql-style typeCast on the oxmysql compat exports only (default on, like oxmysql).
+        oxTypeCast: getBoolConvar('kora_sql_ox_typecast', true),
         debug: getBoolConvar('qbsql_debug', false),
     };
 

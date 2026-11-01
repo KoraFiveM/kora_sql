@@ -45,11 +45,26 @@ end
 --
 -- `params` is always normalised to a table before crossing, because the JS
 -- wrapper's trailing-argument peeling relies on a stable argument count.
+--
+-- The oxmysql path calls the JS `ox*` export variants (see exports.js), which
+-- apply oxmysql's typeCast when the `kora_sql_ox_typecast` convar is on.
+-- Without a callback the argument is omitted entirely rather than passed as
+-- nil, so no hole sits between `params` and `resource` (the JS side also
+-- tolerates one).
+local oxName = {
+    query = 'oxQuery', single = 'oxSingle', scalar = 'oxScalar', insert = 'oxInsert',
+    update = 'oxUpdate', prepare = 'oxPrepare', rawExecute = 'oxRawExecute',
+}
+
 local function asyncCall(jsName)
+    local target = oxName[jsName] or jsName
     return function(query, params, cb)
         if isCallable(params) and cb == nil then cb, params = params, nil end
         local resource = GetInvokingResource() or GetCurrentResourceName()
-        exports.kora_sql[jsName](exports.kora_sql, query, params or {}, cb, resource)
+        if cb == nil then
+            return exports.kora_sql[target](exports.kora_sql, query, params or {}, resource)
+        end
+        return exports.kora_sql[target](exports.kora_sql, query, params or {}, cb, resource)
     end
 end
 
@@ -61,7 +76,7 @@ local function syncCall(jsName)
         local resource = GetInvokingResource() or GetCurrentResourceName()
         warnSyncOnce(resource)
         local p = promise.new()
-        exports.kora_sql[jsName](exports.kora_sql, query, params or {}, function(result, err)
+        exports.kora_sql[oxName[jsName] or jsName](exports.kora_sql, query, params or {}, function(result, err)
             if err then p:reject(err) else p:resolve(result) end
         end, resource)
         local ok, res = pcall(Citizen.Await, p)
@@ -129,7 +144,8 @@ end
 local function rawExecute(handle, params, cb)
     if isCallable(params) and cb == nil then cb, params = params, nil end
     local resource = GetInvokingResource() or GetCurrentResourceName()
-    return exports.kora_sql:rawExecute(handle, params or {}, cb, resource)
+    if cb == nil then return exports.kora_sql:oxRawExecute(handle, params or {}, resource) end
+    return exports.kora_sql:oxRawExecute(handle, params or {}, cb, resource)
 end
 
 local function isReady()

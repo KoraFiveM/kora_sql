@@ -99,4 +99,27 @@ h.test('a trailing semicolon alone is NOT treated as multi-statement', function(
     h.assertTrue(errSeen == nil, 'a bare trailing semicolon must not be refused')
 end)
 
+h.test('oxmysql bridge calls the ox* typeCast variants, native names untouched', function()
+    handle.setInvokingResource('r')
+    local ex = function(n) return handle.getExport('oxmysql', n) end
+    for lua, js in pairs({ query = 'oxQuery', single = 'oxSingle', scalar = 'oxScalar',
+        insert = 'oxInsert', update = 'oxUpdate', prepare = 'oxPrepare' }) do
+        ex(lua)('SELECT 1', {}, function() end)
+        h.assertTrue(handle.lastCallExact(js) ~= nil, lua .. ' must call exports.kora_sql:' .. js)
+        ex(lua .. 'Sync')('SELECT 1', {})
+    end
+    ex('rawExecute')('SELECT 1', {}, function() end)
+    h.assertTrue(handle.lastCallExact('oxRawExecute') ~= nil, 'rawExecute -> oxRawExecute')
+    h.assertTrue(handle.lastCallExact('scalar') == nil, 'native scalar must not be used by the bridge')
+end)
+
+h.test('query without a callback leaves no nil hole before the invoking resource', function()
+    handle.setInvokingResource('no-cb-resource')
+    handle.getExport('oxmysql', 'query')('SELECT 1', { 1 })
+    local call = handle.lastCallExact('oxQuery')
+    h.assertEqual(#call.args, 3, 'args are exactly (sql, params, resource)')
+    h.assertEqual(call.args[3], 'no-cb-resource')
+    h.assertEqual(type(call.args[2]), 'table')
+end)
+
 h.report('oxmysql-compat')

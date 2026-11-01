@@ -43,7 +43,10 @@ end
 dofile('stubs/oxmysql/lib/MySQL.lua')
 
 local function last(name)
-    for i = #calls, 1, -1 do if calls[i].name == name then return calls[i] end end
+    local ox = 'ox' .. name:sub(1, 1):upper() .. name:sub(2)
+    for i = #calls, 1, -1 do
+        if calls[i].name == name or calls[i].name == ox then return calls[i] end
+    end
 end
 local function reset(value, err) calls = {}; nextResult = { value = value, err = err } end
 
@@ -63,7 +66,7 @@ end)
 h.test('kora_sql manifest does not provide oxmysql (placeholder owns the name)', function()
     local m = readFile('fxmanifest.lua')
     h.assertTrue(not m:match("\nprovide%s+['\"]oxmysql['\"]"), 'must not provide oxmysql')
-    h.assertTrue(m:match("\nprovide 'mysql%-async'"), 'still provides mysql-async')
+    h.assertTrue(not m:match("\nprovide%s+['\"]mysql%-async['\"]"), 'must not provide mysql-async (stub owns the name)')
     h.assertTrue(m:match("\nprovide 'ghmattimysql'"), 'still provides ghmattimysql')
 end)
 

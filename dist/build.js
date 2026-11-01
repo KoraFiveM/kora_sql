@@ -120,6 +120,8 @@ var require_config = __commonJS({
         slowRing: getIntConvar("qbsql_slow_ring", 200),
         allowMultipleStatements: getBoolConvar("qbsql_allow_multiple_statements", false),
         connectRetryInterval: Math.max(250, getIntConvar("qbsql_connect_retry_interval", 2e3)),
+        // oxmysql-style typeCast on the oxmysql compat exports only (default on, like oxmysql).
+        oxTypeCast: getBoolConvar("kora_sql_ox_typecast", true),
         debug: getBoolConvar("qbsql_debug", false)
       };
       log2.setDebug(cfg.debug);
@@ -20953,12 +20955,85 @@ var require_stats = __commonJS({
   }
 });
 
+// server/js/typecast.js
+var require_typecast = __commonJS({
+  "server/js/typecast.js"(exports2, module2) {
+    "use strict";
+    var BINARY_CHARSET = 63;
+    function typeCastExecute(field, next) {
+      switch (field.type) {
+        case "DATETIME":
+        case "DATETIME2":
+        case "TIMESTAMP":
+        case "TIMESTAMP2":
+        case "NEWDATE": {
+          const value = field.string();
+          return value ? new Date(value).getTime() : null;
+        }
+        case "DATE": {
+          const value = field.string();
+          return value ? (/* @__PURE__ */ new Date(value + " 00:00:00")).getTime() : null;
+        }
+        case "JSON":
+          return field.string();
+        default:
+          return next();
+      }
+    }
+    __name(typeCastExecute, "typeCastExecute");
+    function typeCast(field, next) {
+      switch (field.type) {
+        case "DATETIME":
+        case "DATETIME2":
+        case "TIMESTAMP":
+        case "TIMESTAMP2":
+        case "NEWDATE": {
+          const value = field.string();
+          return value ? new Date(value).getTime() : null;
+        }
+        case "DATE": {
+          const value = field.string();
+          return value ? (/* @__PURE__ */ new Date(value + " 00:00:00")).getTime() : null;
+        }
+        case "TINY": {
+          if (field.length !== 1) return next();
+          const value = field.string();
+          return value === null ? null : value === "1";
+        }
+        case "BIT": {
+          const buffer = field.buffer();
+          if (!buffer) return null;
+          return buffer.length === 1 ? buffer[0] === 1 : buffer[0];
+        }
+        case "TINY_BLOB":
+        case "MEDIUM_BLOB":
+        case "LONG_BLOB":
+        case "BLOB": {
+          if (field.charset === BINARY_CHARSET) {
+            const value = field.buffer();
+            if (value === null) return [value];
+            return [...value];
+          }
+          return field.string();
+        }
+        case "JSON":
+          return field.string();
+        default:
+          return next();
+      }
+    }
+    __name(typeCast, "typeCast");
+    module2.exports = { typeCast, typeCastExecute, BINARY_CHARSET };
+  }
+});
+
 // server/js/execute.js
 var require_execute3 = __commonJS({
   "server/js/execute.js"(exports2, module2) {
     "use strict";
     var { isUnpreparableError } = require_statements();
     var log2 = require_logger();
+    var { typeCast, typeCastExecute } = require_typecast();
     var NULL_SENTINEL = "\0qbsql:null\0";
     function normalizeParams(params) {
       if (params === null || params === void 0) return [];
@@ -21022,6 +21097,22 @@ var require_execute3 = __commonJS({
         this.legacyInventory = legacyInventory;
         this.legacyHousing = legacyHousing;
       }
+      // A view of this executor whose queries apply oxmysql's typeCast (booleans,
+      // date-as-ms, binary blobs, JSON strings). Only the oxmysql compatibility
+      // export path uses it; the native executor's result shapes are unchanged.
+      // WARNING: the view is Object.create(this), so reads fall through to the
+      // base executor but any instance-field WRITE (this.x = ...) made while
+      // running on the view lands on the view and is invisible to the base (and
+      // vice versa for later replacement). Executor methods must mutate shared
+      // state only through objects (pools/statements/stats), never by assigning
+      // new values to fields on `this`.
+      withOxTypeCast() {
+        if (!this._oxView) {
+          this._oxView = Object.create(this);
+          this._oxView._oxTypeCast = true;
+        }
+        return this._oxView;
+      }
       // Choose the pool. Writes and anything ambiguous go to the write pool; only
       // statements that are unambiguously reads go to the read pool. A leading
       // SELECT or SHOW or WITH is the cheap, safe heuristic; a false negative
@@ -21032,6 +21123,9 @@ var require_execute3 = __commonJS({
           return this.pools.read;
         }
         return this.pools.write;
+      }
+      _query(pool, sql, params) {
+        return this._oxTypeCast ? pool.query({ sql, values: params || [], typeCast }) : pool.query(sql, params || []);
       }
       // The one true executor. Returns mysql2's raw [rows|result, fields] pair.
       // Keeping the pair until the final shape adapter is important for
@@ -21051,19 +21145,19 @@ var require_execute3 = __commonJS({
             result = [await legacy, void 0];
           } else if (this.statements.isPreparable(sql)) {
             try {
-              result = await pool.execute(sql, params || []);
+              result = await (this._oxTypeCast ? pool.execute({ sql, values: params || [], typeCast: typeCastExecute }) : pool.execute(sql, params || []));
               this.statements.recordHit(sql);
             } catch (err) {
               if (isUnpreparableError(err)) {
                 this.statements.markUnpreparable(sql);
                 log2.debug("execute", `unpreparable, falling back to query(): ${sql}`);
-                result = await pool.query(sql, params || []);
+                result = await this._query(pool, sql, params);
               } else {
                 throw err;
               }
             }
           } else {
-            result = await pool.query(sql, params || []);
+            result = await this._query(pool, sql, params);
             this.statements.recordMiss(sql);
           }
           const rows = result[0];
@@ -21120,7 +21214,7 @@ var require_execute3 = __commonJS({
       }
       // oxmysql's prepare API accepts either one parameter list or an array of
       // parameter lists, executes each set, and unpacks each response. This is
-      // distinct from qbsql's execute() OkPacket-shaped modern API.
+      // distinct from kora_sql's execute() OkPacket-shaped modern API.
       async prepare(sql, params, resource) {
         const normal = normalizeParams(params);
         const sets = Array.isArray(normal) && normal.length > 0 && normal.every(Array.isArray) ? normal.map(normalizeParams) : [normal];
@@ -21177,7 +21271,7 @@ var require_legacy_inventory = __commonJS({
     function createLegacyInventoryBridge2({ getState, request, onStop }) {
       const pending = /* @__PURE__ */ new Set();
       onStop((name) => {
-        if (name !== "qbinventory" && name !== "qbsql") return;
+        if (name !== "kora_inventory" && name !== "kora_sql") return;
         for (const finish of [...pending]) finish(null, `${name} stopped during legacy police trash cleanup`);
       });
       return /* @__PURE__ */ __name(function legacyInventory(sql, params) {
@@ -21261,12 +21355,12 @@ var require_legacy_housing = __commonJS({
       const pending = /* @__PURE__ */ new Set();
       let selected = false;
       onStop((name) => {
-        if (name !== "qbhousing" && name !== "qbsql") return;
-        if (name === "qbhousing") selected = true;
+        if (name !== "kora_housing" && name !== "kora_sql") return;
+        if (name === "kora_housing") selected = true;
         for (const finish of [...pending]) finish(null, `${name} stopped during legacy housing read`);
       });
       return /* @__PURE__ */ __name(function legacyHousing(sql, params, resource) {
-        if (resource === "qbhousing" || !touchesStockTables(sql)) return null;
+        if (resource === "kora_housing" || !touchesStockTables(sql)) return null;
         const state = getState();
         if (state === "started" || state === "starting") selected = true;
         else if (!selected) return null;
@@ -22105,6 +22199,10 @@ var require_exports = __commonJS({
               cb = args.pop();
               continue;
             }
+            if ((last === null || last === void 0) && args.length > implArity(impl)) {
+              args.pop();
+              continue;
+            }
             if (typeof last === "string" && resource === null && args.length > implArity(impl)) {
               resource = args.pop();
               continue;
@@ -22173,14 +22271,21 @@ var require_exports = __commonJS({
       const insert = dataExport("insert", (sql, params, resource) => api2.executor.insert(sql, params, resource));
       const update = dataExport("update", (sql, params, resource) => api2.executor.update(sql, params, resource));
       const prepare = dataExport("prepare", (sql, params, resource) => api2.executor.prepare(sql, params, resource));
-      oxAsync("query", query);
-      oxAsync("fetch", query);
-      oxAsync("execute", query);
-      oxAsync("single", single);
-      oxAsync("scalar", scalar);
-      oxAsync("insert", insert);
-      oxAsync("update", update);
-      oxAsync("prepare", prepare);
+      const oxExec = /* @__PURE__ */ __name(() => api2.cfg && api2.cfg.oxTypeCast === false ? api2.executor : api2.executor.withOxTypeCast(), "oxExec");
+      const oxQuery = dataExport("oxQuery", (sql, params, resource) => oxExec().query(sql, params, resource));
+      const oxSingle = dataExport("oxSingle", (sql, params, resource) => oxExec().single(sql, params, resource));
+      const oxScalar = dataExport("oxScalar", (sql, params, resource) => oxExec().scalar(sql, params, resource));
+      const oxInsert = dataExport("oxInsert", (sql, params, resource) => oxExec().insert(sql, params, resource));
+      const oxUpdate = dataExport("oxUpdate", (sql, params, resource) => oxExec().update(sql, params, resource));
+      const oxPrepare = dataExport("oxPrepare", (sql, params, resource) => oxExec().prepare(sql, params, resource));
+      oxAsync("query", oxQuery);
+      oxAsync("fetch", oxQuery);
+      oxAsync("execute", oxQuery);
+      oxAsync("single", oxSingle);
+      oxAsync("scalar", oxScalar);
+      oxAsync("insert", oxInsert);
+      oxAsync("update", oxUpdate);
+      oxAsync("prepare", oxPrepare);
       const transaction = dataExport("transaction", (queries, params, resource) => api2.txn.transaction(queries, params, resource));
       dataExport("transactionChecked", (queries, operation, resource) => api2.txn.transactionChecked(queries, operation));
       dataExport("awaitCheckedOperation", (key, fingerprint, resource) => api2.txn.awaitCheckedOperation(key, fingerprint));
@@ -22203,7 +22308,15 @@ var require_exports = __commonJS({
         }
         return api2.executor.rawExecute(sql, params, resource);
       });
-      oxAsync("rawExecute", rawExecute);
+      const oxRawExecute = dataExport("oxRawExecute", (handle, params, resource) => {
+        const sql = typeof handle === "number" ? api2.store.get(handle) : handle;
+        if (typeof sql !== "string") {
+          log2.warn("exports", `oxRawExecute called with unknown store handle ${handle} -- did the resource restart?`);
+          return Promise.resolve(null);
+        }
+        return oxExec().rawExecute(sql, params, resource);
+      });
+      oxAsync("rawExecute", oxRawExecute);
       const startTransaction = /* @__PURE__ */ __name(function(callback, resource) {
         const p = Promise.resolve().then(() => api2.ready()).then(() => api2.txn.startTransaction(callback, resource));
         p.catch(() => {
@@ -22385,12 +22498,12 @@ async function boot() {
   });
   api.pools = pools;
   const legacyInventory = createLegacyInventoryBridge({
-    getState: /* @__PURE__ */ __name(() => GetResourceState("qbinventory"), "getState"),
+    getState: /* @__PURE__ */ __name(() => GetResourceState("kora_inventory"), "getState"),
     request: /* @__PURE__ */ __name((callback) => registerExport.qbinventory.deleteLegacyPoliceTrash(callback), "request"),
     onStop: /* @__PURE__ */ __name((callback) => on("onResourceStop", callback), "onStop")
   });
   const legacyHousing = createLegacyHousingBridge({
-    getState: /* @__PURE__ */ __name(() => GetResourceState("qbhousing"), "getState"),
+    getState: /* @__PURE__ */ __name(() => GetResourceState("kora_housing"), "getState"),
     request: /* @__PURE__ */ __name((operation, args, callback) => registerExport.qbhousing.readLegacyHousing(operation, args, callback), "request"),
     onStop: /* @__PURE__ */ __name((callback) => on("onResourceStop", callback), "onStop")
   });

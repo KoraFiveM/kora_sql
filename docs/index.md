@@ -52,6 +52,7 @@ set qbsql_flush_interval 250       # ms between coalescing flushes
 set qbsql_max_pending_rows 500     # high-water mark that forces a flush
 set qbsql_slow_threshold 150       # ms; queries slower than this hit the slow log
 set qbsql_allow_multiple_statements false
+set kora_sql_ox_typecast true      # oxmysql-style result conversion on the oxmysql path (see below)
 set qbsql_debug false
 ```
 
@@ -64,8 +65,26 @@ kora_sql.
 Stock ox_inventory **requires** the placeholder: deploy `stubs/oxmysql` as
 `[compat]/oxmysql`, ensured after kora_sql and before ox_lib/ox_inventory. It declares
 `version '2.7.3'` and ships `lib/MySQL.lua`. Real oxmysql must not run alongside it.
-See `stubs/oxmysql/README.md`. `stubs/mysql-async`
-is the equivalent fallback for `@mysql-async/` includes.
+See `stubs/oxmysql/README.md`.
+
+kora_sql no longer `provide`s `mysql-async`. Resources that declare
+`dependency 'mysql-async'` or include `@mysql-async/lib/MySQL.lua` need the
+`stubs/mysql-async` stub deployed as `resources/[compat]/mysql-async` and ensured
+after kora_sql (`ensure kora_sql` then `ensure mysql-async`). Never run the real
+mysql-async alongside it. Resources that only call `exports['mysql-async']:mysql_*`
+or the `MySQL` global need nothing extra. See `stubs/mysql-async/README.md`.
+
+### oxmysql result conversion (`kora_sql_ox_typecast`)
+On the oxmysql compatibility path only (`exports.oxmysql:*`, the oxmysql
+`*_async` exports, and the `MySQL` global from `@oxmysql/lib/MySQL.lua`,
+`@mysql-async/lib/MySQL.lua` or `@kora_sql/lib/MySQL.lua`), results go through a
+port of oxmysql's `typeCast`, **on by default** like oxmysql:
+`TINYINT(1)`/`BIT(1)` → boolean, `DATETIME`/`TIMESTAMP`/`DATE` → milliseconds since
+epoch (`null` when empty), binary `BLOB`s → byte arrays, text `BLOB`s → strings,
+`JSON` → its string (oxmysql's `jsonStrings`). Prepared (`execute`) statements only
+convert dates and JSON, exactly as upstream. Set `set kora_sql_ox_typecast false` to get
+mysql2's default shapes there instead. `Kora.sql.*` and `exports.kora_sql:*` are
+never converted.
 
 ## Usage examples
 

@@ -151,11 +151,27 @@ original calling resource, not to kora_sql.
 
 ## mysql-async compat
 
+kora_sql does not `provide 'mysql-async'`. For `dependency 'mysql-async'` or
+`@mysql-async/lib/MySQL.lua` includes, copy `stubs/mysql-async` to
+`resources/[compat]/mysql-async` and `ensure` it after kora_sql (never alongside
+the real mysql-async). `exports['mysql-async']:mysql_fetch_all / mysql_fetch_scalar /
+mysql_execute / mysql_insert / mysql_transaction / mysql_store / is_ready` are served by kora_sql
+without the stub.
+
 `shared_script '@oxmysql/lib/MySQL.lua'` works unchanged through kora_sql's
 provided identity; `@kora_sql/lib/MySQL.lua` is the direct equivalent. Both install
 the full current `MySQL` global: callable top-level methods with
 `.await`, lazy `MySQL.Async.*`/`MySQL.Sync.*` aliases, stored-query handles,
 `MySQL.ready`/`.ready.await`, and `MySQL.startTransaction`.
+
+## oxmysql typeCast (`kora_sql_ox_typecast`)
+
+The oxmysql compatibility path (`exports.oxmysql:*`, `*_async`, and the `MySQL`
+global from the oxmysql/mysql-async/kora_sql `lib/MySQL.lua` includes) applies a port of
+oxmysql's `typeCast` by default: `TINYINT(1)`/`BIT(1)` → boolean, `DATETIME`/`TIMESTAMP`/`DATE`
+→ ms since epoch, binary `BLOB` → byte array, `JSON` → string. Prepared statements convert
+only dates and JSON (as upstream). `set kora_sql_ox_typecast false` disables it; the native
+`Kora.sql.*` / `exports.kora_sql:*` API is never converted.
 
 ## Console commands (`command.qbsql` ace, or the server console)
 - `/qbsql ping` — SELECT VERSION() + round-trip time.
