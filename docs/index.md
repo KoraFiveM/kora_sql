@@ -254,9 +254,8 @@ string, pool/cache sizes, flush timing — Lua's `Config` is invisible to the
 Node host). `config.lua` only holds Lua-side behaviour:
 
 `Config.compat.oxmysql` / `.mysqlAsync` / `.ghmattimysql` (each default `true`,
-toggle a compat surface off entirely), `Config.compat.installMySQLGlobal`
-(create the `MySQL` global when `@kora_sql/lib/MySQL.lua` is included),
-`Config.compat.warnOnSync` (default `true`, print once per resource on first
+toggle a compat surface off entirely; including `@kora_sql/lib/MySQL.lua`
+always installs the `MySQL` global), `Config.compat.warnOnSync` (default `true`, print once per resource on first
 blocking `*Sync` use), `Config.sql.awaitTimeout` (30s, how long `Kora.sql.*`
 waits before returning a timeout error; `0` disables it, migrations are never
 timed out; a timed-out query may still complete), `Config.sql.readyTimeout`
