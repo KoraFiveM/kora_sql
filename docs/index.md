@@ -258,8 +258,10 @@ toggle a compat surface off entirely), `Config.compat.installMySQLGlobal`
 (create the `MySQL` global when `@kora_sql/lib/MySQL.lua` is included),
 `Config.compat.warnOnSync` (default `true`, print once per resource on first
 blocking `*Sync` use), `Config.sql.awaitTimeout` (30s, how long `Kora.sql.*`
-waits before rejecting), `Config.sql.readyTimeout` (60s, how long
-`Kora.sql.ready()` polls before giving up).
+waits before returning a timeout error; `0` disables it, migrations are never
+timed out; a timed-out query may still complete), `Config.sql.readyTimeout`
+(60s, how long `Kora.sql.ready()` waits for the `qbsql:ready` event before
+giving up). Both are read from the calling resource's own `Config`.
 
 ## Related resources
 

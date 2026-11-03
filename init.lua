@@ -33,23 +33,67 @@ Kora.sql.NULL = '\0qbsql:null\0'
 
 local driver = exports.kora_sql
 
+-- Await deadline (F#273). Config.sql.awaitTimeout in the calling resource, else
+-- 30 s; 0 turns it off. Migrations and checked-operation recovery may
+-- legitimately run long, so they are never timed out.
+local DEFAULT_AWAIT_TIMEOUT = 30000
+local UNTIMED = { migrate = true, awaitCheckedOperation = true, awaitCheckedOperations = true }
+local WATCHDOG_MS = 1000
+local TIMED_OUT = {}
+
+local function awaitTimeout()
+    local configured = Config and Config.sql and Config.sql.awaitTimeout
+    if type(configured) == 'number' and configured >= 0 then return configured end
+    return DEFAULT_AWAIT_TIMEOUT
+end
+
+-- One lazily armed watchdog timer for every pending await, not a timer per
+-- query: it runs once a second only while something is waiting.
+local pending, watchdogArmed = {}, false
+
+local function sweep()
+    local now, waiting = GetGameTimer(), false
+    for settle, deadline in pairs(pending) do
+        if now >= deadline then settle(nil, TIMED_OUT) else waiting = true end
+    end
+    watchdogArmed = waiting
+    if waiting then SetTimeout(WATCHDOG_MS, sweep) end
+end
+
+local function watch(settle, timeout)
+    pending[settle] = GetGameTimer() + timeout
+    if watchdogArmed then return end
+    watchdogArmed = true
+    SetTimeout(WATCHDOG_MS, sweep)
+end
+
 -- Run a JS export that returns a promise, and Await it on this coroutine.
 -- Returns (value, errorString). The JS `dataExport` wrapper returns a promise
 -- when no callback is passed; FiveM marshals its resolution back here.
 local function await(name, ...)
     local args = { ... }
     local p = promise.new()
-    -- We pass a Lua callback as the trailing argument; the JS side detects a
-    -- callable last arg and calls cb(result, errString) instead of returning a
-    -- promise. This avoids depending on cross-boundary promise marshalling.
-    args[#args + 1] = function(result, err)
+    local settled = false
+    local timeout = not UNTIMED[name] and awaitTimeout() or 0
+    local function settle(result, err)
+        if settled then return end
+        settled = true
+        pending[settle] = nil
+        if err == TIMED_OUT then
+            err = ('kora_sql %s timed out after %d ms (the query may still complete)'):format(name, timeout)
+        end
         if err then
             p:reject(err)
         else
             p:resolve(result)
         end
     end
+    -- We pass a Lua callback as the trailing argument; the JS side detects a
+    -- callable last arg and calls cb(result, errString) instead of returning a
+    -- promise. This avoids depending on cross-boundary promise marshalling.
+    args[#args + 1] = settle
     driver[name](driver, table.unpack(args))
+    if not settled and timeout > 0 then watch(settle, timeout) end
     local ok, res = pcall(Citizen.Await, p)
     if not ok then
         return nil, tostring(res)
