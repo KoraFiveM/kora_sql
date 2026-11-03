@@ -101,20 +101,44 @@ local function await(name, ...)
     return res
 end
 
+-- Waiters parked until kora_sql broadcasts `qbsql:ready` (F#275). One handler
+-- per consumer VM, registered on first need, instead of polling the export.
+local readyWaiters, readyHooked = {}, false
+
+local function releaseReadyWaiters()
+    local waiters = readyWaiters
+    readyWaiters = {}
+    for i = 1, #waiters do waiters[i](true) end
+end
+
+function Kora.sql.ready(timeoutMs)
+    if exports.kora_sql:isReady() then return true end
+    if not readyHooked then
+        readyHooked = true
+        AddEventHandler('qbsql:ready', releaseReadyWaiters)
+    end
+
+    local p, settled = promise.new(), false
+    local function settle(ok)
+        if settled then return end
+        settled = true
+        if not ok then
+            for i = #readyWaiters, 1, -1 do
+                if readyWaiters[i] == settle then table.remove(readyWaiters, i) break end
+            end
+        end
+        p:resolve(ok)
+    end
+    readyWaiters[#readyWaiters + 1] = settle
+    SetTimeout(timeoutMs or (Config and Config.sql and Config.sql.readyTimeout) or 60000, function() settle(false) end)
+
+    if Citizen.Await(p) then return true end
+    return false, 'qbsql not ready within timeout'
+end
+
 -- The yielding API. Each returns (value, errorString); on error the value is
 -- nil and the second return carries the message, per this codebase's
 -- fallible-function convention (never throws across the call).
-function Kora.sql.ready(timeoutMs)
-    -- isReady is cheap and synchronous; poll it so a caller can gate on the pool.
-    if exports.kora_sql:isReady() then return true end
-    local deadline = GetGameTimer() + (timeoutMs or (Config and Config.sql and Config.sql.readyTimeout) or 60000)
-    while not exports.kora_sql:isReady() do
-        if GetGameTimer() > deadline then return false, 'qbsql not ready within timeout' end
-        Wait(50)
-    end
-    return true
-end
-
 function Kora.sql.query(sql, params)    return await('query', sql, params) end
 function Kora.sql.single(sql, params)   return await('single', sql, params) end
 function Kora.sql.scalar(sql, params)   return await('scalar', sql, params) end
