@@ -152,8 +152,11 @@ local function isReady()
     return exports.kora_sql:isReady()
 end
 
+-- Parks on kora_sql's ready latch (server/ready.lua) instead of calling the
+-- cross-runtime isReady export every frame (F#272). Same semantics: no timeout.
 local function awaitConnection()
-    while not exports.kora_sql:isReady() do Wait(0) end
+    if Ready and Ready.await then return Ready.await(false) end
+    while not exports.kora_sql:isReady() do Wait(50) end
     return true
 end
 

@@ -1,6 +1,7 @@
 -- Readiness fan-out. The JS runtime emits `qbsql:internal:ready` once the pool
 -- is up; this file latches that and re-broadcasts a public `qbsql:ready` event
 -- other resources can wait on, plus a Ready table other kora_sql Lua files consult.
+-- Nothing here polls: waiters park on a promise released by the ready event.
 --
 -- WHY a Lua latch rather than just calling exports.kora_sql:isReady() everywhere:
 -- a resource that loads before kora_sql finishes its async boot would get
@@ -8,11 +9,15 @@
 -- helper below give both a push and a pull path.
 
 local isReady = false
+local waiters = {}
 
 -- Latch the internal ready signal from server/js/index.js.
 AddEventHandler('qbsql:internal:ready', function(version)
     isReady = true
-    print(('^5[qbsql:ready]^7 driver up: %s'):format(version and version.server or 'unknown'))
+    local parked = waiters
+    waiters = {}
+    for i = 1, #parked do parked[i](true) end
+    print(('^5[kora_sql]^7 driver up: %s'):format(version and version.server or 'unknown'))
     -- Public event. Late subscribers also get the answer via the poll below.
     TriggerEvent('qbsql:ready', version)
 end)
@@ -27,12 +32,23 @@ end
 
 -- Block the CURRENT coroutine until the pool is up (or timeout). Only for use
 -- from inside a CreateThread -- never call from the main resource-load path.
+-- Parks on the ready latch instead of polling (F#272). `false` waits forever.
 function Ready.await(timeoutMs)
     if isReady then return true end
-    local deadline = GetGameTimer() + (timeoutMs or 60000)
-    while not isReady do
-        if GetGameTimer() > deadline then return false end
-        Wait(50)
+    local p, settled = promise.new(), false
+    local function settle(ok)
+        if settled then return end
+        settled = true
+        if not ok then
+            for i = #waiters, 1, -1 do
+                if waiters[i] == settle then table.remove(waiters, i) break end
+            end
+        end
+        p:resolve(ok)
     end
-    return true
+    waiters[#waiters + 1] = settle
+    if timeoutMs ~= false then
+        SetTimeout(timeoutMs or 60000, function() settle(false) end)
+    end
+    return Citizen.Await(p) == true
 end
