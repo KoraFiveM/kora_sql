@@ -1,6 +1,7 @@
--- /qbsql console commands: ping | stats | slow | queue | flush | bench
+-- /kora_sql console commands: ping | stats | slow | queue | flush | bench
+-- `/qbsql` stays registered as an alias so existing admin habits keep working.
 --
--- Registered as ace-gated (`command.qbsql`) so they work from the server
+-- Ace-gated (`command.kora_sql` or the legacy `command.qbsql`) so they work from the server
 -- console (which is allowed everything) and from an admin, but not from an
 -- arbitrary client. The bench command is the deliverable that turns "faster
 -- than oxmysql" from a claim into a printed number.
@@ -9,8 +10,11 @@ local runBench
 
 local function fmt(n) return ('%.2f'):format(n or 0) end
 
-RegisterCommand('qbsql', function(source, args)
-    if source ~= 0 and not IsPlayerAceAllowed(source, 'command.qbsql') then
+local COMMANDS = { 'kora_sql', 'qbsql' }
+
+local function handleCommand(source, args)
+    if source ~= 0 and not IsPlayerAceAllowed(source, 'command.kora_sql')
+        and not IsPlayerAceAllowed(source, 'command.qbsql') then
         return
     end
 
@@ -18,7 +22,7 @@ RegisterCommand('qbsql', function(source, args)
 
     if sub == 'ping' then
         CreateThread(function()
-            if not Ready.await(5000) then print('^1[qbsql]^7 not ready') return end
+            if not Ready.await(5000) then print('^1[kora_sql]^7 not ready') return end
             local started = GetGameTimer()
             local p = promise.new()
             exports.kora_sql:query('SELECT VERSION() AS v', {}, function(rows, err)
@@ -27,15 +31,15 @@ RegisterCommand('qbsql', function(source, args)
             local ok, rows = pcall(Citizen.Await, p)
             local rtt = GetGameTimer() - started
             if ok and rows and rows[1] then
-                print(('^5[qbsql]^7 pong: %s (%dms RTT)'):format(rows[1].v, rtt))
+                print(('^5[kora_sql]^7 pong: %s (%dms RTT)'):format(rows[1].v, rtt))
             else
-                print(('^1[qbsql]^7 ping failed: %s'):format(tostring(rows)))
+                print(('^1[kora_sql]^7 ping failed: %s'):format(tostring(rows)))
             end
         end)
 
     elseif sub == 'stats' then
         local s = exports.kora_sql:stats()
-        print('^5[qbsql] stats^7')
+        print('^5[kora_sql] stats^7')
         print(('  queries: %d total, %d errors, avg %sms, %d fingerprints')
             :format(s.queries.total, s.queries.errors, fmt(s.queries.avgMs), s.queries.distinctFingerprints))
         print(('  queue: %d crossings, %d rows in -> %d written (coalesce %sx), %s stmts/flush, %d dead-lettered')
@@ -49,7 +53,7 @@ RegisterCommand('qbsql', function(source, args)
     elseif sub == 'slow' then
         local limit = tonumber(args[2]) or 20
         local rows = exports.kora_sql:slowQueries(limit)
-        print(('^5[qbsql] %d slowest^7'):format(#rows))
+        print(('^5[kora_sql] %d slowest^7'):format(#rows))
         for _, r in ipairs(rows) do
             print(('  %sms [%s] %s'):format(fmt(r.ms), r.resource or '?', (r.sql or ''):sub(1, 90)))
         end
@@ -57,27 +61,29 @@ RegisterCommand('qbsql', function(source, args)
     elseif sub == 'queue' then
         -- Depth is JS-side; expose via a tiny query on stats plus a direct call.
         local s = exports.kora_sql:stats()
-        print('^5[qbsql] queue^7')
+        print('^5[kora_sql] queue^7')
         print(('  crossings=%d rowsIn=%d rowsWritten=%d retries=%d deadLettered=%d')
             :format(s.queue.boundaryCrossings, s.queue.rowsEnqueued, s.queue.rowsWritten, s.queue.retries, s.queue.deadLettered))
 
     elseif sub == 'flush' then
-        exports.kora_sql:flush(function(ok) print(ok and '^5[qbsql]^7 flushed' or '^1[qbsql]^7 flush failed') end)
+        exports.kora_sql:flush(function(ok) print(ok and '^5[kora_sql]^7 flushed' or '^1[kora_sql]^7 flush failed') end)
 
     elseif sub == 'bench' then
         local n = tonumber(args[2]) or 500
         CreateThread(function() runBench(n) end)
 
     else
-        print('^3[qbsql]^7 usage: /qbsql ping | stats | slow [n] | queue | flush | bench [n]')
+        print('^3[kora_sql]^7 usage: /kora_sql ping | stats | slow [n] | queue | flush | bench [n]')
     end
-end, false)
+end
+
+for i = 1, #COMMANDS do RegisterCommand(COMMANDS[i], handleCommand, false) end
 
 -- A/B benchmark: N individual execute() writes vs one enqueueMany + flush of the
 -- same N rows, on a scratch table. Prints wall-clock, round trips, and boundary
 -- crossings for each so the coalescing win is a measured fact.
 runBench = function(n)
-    if not Ready.await(5000) then print('^1[qbsql]^7 bench: not ready') return end
+    if not Ready.await(5000) then print('^1[kora_sql]^7 bench: not ready') return end
     local res = GetCurrentResourceName()
 
     local function await(jsName, ...)
@@ -90,7 +96,7 @@ runBench = function(n)
         return ok, r
     end
 
-    print(('^5[qbsql] bench^7 preparing scratch table for %d rows...'):format(n))
+    print(('^5[kora_sql] bench^7 preparing scratch table for %d rows...'):format(n))
     await('execute', [[CREATE TABLE IF NOT EXISTS `qbsql_bench` (
         `id` VARCHAR(32) NOT NULL, `v` INT NOT NULL, PRIMARY KEY(`id`)
     ) ENGINE=InnoDB]], {})
@@ -120,7 +126,7 @@ runBench = function(n)
     local statsAfter = exports.kora_sql:stats()
     local crossingsB = statsAfter.queue.boundaryCrossings - statsBefore.queue.boundaryCrossings
 
-    print(('^5[qbsql] bench results for n=%d^7'):format(n))
+    print(('^5[kora_sql] bench results for n=%d^7'):format(n))
     print(('  A) individual execute(): %dms, %d boundary crossings, %d round trips'):format(aMs, n, n))
     print(('  B) enqueueMany+flush:     %dms, %d boundary crossings, ~%d round trips')
         :format(bMs, crossingsB, math.ceil(n / 200)))
