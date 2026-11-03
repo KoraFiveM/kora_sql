@@ -27,7 +27,7 @@ with `oxmysql`, `mysql-async`, and `ghmattimysql`. The performance thesis is
    assignment. **Only sound in assign mode**; a hard `assert` forbids padding in
    accumulate mode (a duplicated row would double-count).
 5. **One boundary crossing per flush**. `enqueueMany` takes an array of rows —
-   N players, one Lua→JS crossing. `/qbsql bench` measures this A/B directly.
+   N players, one Lua→JS crossing. `/kora_sql bench` measures this A/B directly.
 
 ## Configuration split (why convars AND config.lua)
 The Node host cannot read Lua's `Config`. Anything the pool needs at boot

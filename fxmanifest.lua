@@ -42,8 +42,8 @@ shared_scripts {
 -- (never globbed) so the intended sequence is documented, not implied by
 -- alphabetical glob expansion.
 --   1. dist/build.js        bundled driver + mysql2 + export surface
---   2. server/ready.lua     qbsql:ready fan-out + isReady polling helper
---   3. server/commands.lua  /qbsql console commands (consult ready.lua)
+--   2. server/ready.lua     qbsql:ready fan-out + event-driven Ready.await latch
+--   3. server/commands.lua  /kora_sql (alias /qbsql) console commands (consult ready.lua)
 --   4. server/compat/*      pure translation layers, no internal dependents
 server_scripts {
     'dist/build.js',

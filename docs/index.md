@@ -156,7 +156,7 @@ MySQL.Async.execute('UPDATE players SET last_updated = NOW() WHERE citizenid = ?
 
 ### Benchmark the coalescing win
 ```
-/qbsql bench 500
+/kora_sql bench 500
 ```
 Runs an A/B on a scratch table: 500 individual `execute()` upserts (500 round
 trips, 500 Lua→JS boundary crossings) versus one `enqueueMany` + `flush` of the
@@ -184,7 +184,7 @@ Kora.sql.upsert(table, conflictKey, rows, opts) -- immediate awaited batched ups
 Kora.sql.migrate(resource, migrations)          -- { {version=, name=, sql=, checksum=}, ... }
 Kora.sql.migrateFiles(resource, migrations, checksumFn?) -- loads {version=, name=, file=} definitions
 Kora.sql.flush(table?) -> boolean, errString    -- yields until the table (or everything) has drained
-Kora.sql.stats()                                -- query + queue counters (same data as `/qbsql stats`)
+Kora.sql.stats()                                -- query + queue counters (same data as `/kora_sql stats`)
 Kora.sql.NULL                                   -- sentinel for an explicit SQL NULL bind value
 ```
 
@@ -227,14 +227,17 @@ lazy `MySQL.Async.*`/`MySQL.Sync.*`, stored-query handles,
 `exports.ghmattimysql:*` is registered the same way as the oxmysql bridge, for
 resources still written against that driver.
 
-### Console commands (`command.qbsql` ace, or the server console)
+### Console commands (`command.kora_sql` or legacy `command.qbsql` ace, or the server console)
+
+`/kora_sql` is the command; `/qbsql` remains as an alias.
+
 ```
-/qbsql ping      -- SELECT VERSION() + round-trip time
-/qbsql stats     -- query aggregates + queue coalescing counters
-/qbsql slow [n]  -- the n slowest queries, with the resource that issued each
-/qbsql queue     -- pending queue depth / retries / dead-letters
-/qbsql flush     -- force-drain the write queue
-/qbsql bench [n] -- A/B: n individual writes vs one enqueueMany + flush
+/kora_sql ping      -- SELECT VERSION() + round-trip time
+/kora_sql stats     -- query aggregates + queue coalescing counters
+/kora_sql slow [n]  -- the n slowest queries, with the resource that issued each
+/kora_sql queue     -- pending queue depth / retries / dead-letters
+/kora_sql flush     -- force-drain the write queue
+/kora_sql bench [n] -- A/B: n individual writes vs one enqueueMany + flush
 ```
 
 ### Behaviour notes
@@ -254,12 +257,13 @@ string, pool/cache sizes, flush timing — Lua's `Config` is invisible to the
 Node host). `config.lua` only holds Lua-side behaviour:
 
 `Config.compat.oxmysql` / `.mysqlAsync` / `.ghmattimysql` (each default `true`,
-toggle a compat surface off entirely), `Config.compat.installMySQLGlobal`
-(create the `MySQL` global when `@kora_sql/lib/MySQL.lua` is included),
-`Config.compat.warnOnSync` (default `true`, print once per resource on first
+toggle a compat surface off entirely; including `@kora_sql/lib/MySQL.lua`
+always installs the `MySQL` global), `Config.compat.warnOnSync` (default `true`, print once per resource on first
 blocking `*Sync` use), `Config.sql.awaitTimeout` (30s, how long `Kora.sql.*`
-waits before rejecting), `Config.sql.readyTimeout` (60s, how long
-`Kora.sql.ready()` polls before giving up).
+waits before returning a timeout error; `0` disables it, migrations are never
+timed out; a timed-out query may still complete), `Config.sql.readyTimeout`
+(60s, how long `Kora.sql.ready()` waits for the `qbsql:ready` event before
+giving up). Both are read from the calling resource's own `Config`.
 
 ## Related resources
 
