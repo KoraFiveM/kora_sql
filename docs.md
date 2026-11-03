@@ -131,9 +131,58 @@ their checksums, and forwards them to `migrate`. `checksumFn` defaults to
 `Kora.util.fnv1a`; pass the resource's historical checksum function when an
 existing migration used another format.
 
+### Kora.sql.ensureTable(spec) / Kora.sql.ensureTables(specs) -> report, errString
+Declare a table in Lua instead of shipping a `.sql` file. If the table is
+missing it is created (`CREATE TABLE IF NOT EXISTS`); if it exists, anything
+missing is **added** (columns, primary key, indexes, foreign keys). Existing
+columns are never altered or dropped: a type, nullability or collation that
+differs from the spec is returned in `report.warnings` and logged (one summary line per table). Safe to call
+on every boot. `ensureTables` runs the list in order, so list foreign key
+parents first, and stops at the first error.
+
+```lua
+Kora.sql.ensureTables({
+    {
+        name = 'my_orders',
+        collate = 'utf8mb4_unicode_ci',            -- optional; engine/charset default to InnoDB/utf8mb4
+        columns = {
+            { name = 'id',        type = 'bigint', unsigned = true, auto_increment = true },
+            { name = 'citizenid', type = 'varchar(50)', null = true, default = Kora.sql.NULL },
+            { name = 'status',    type = 'enum', values = { 'open', 'done' }, default = 'open' },
+            { name = 'created_at', type = 'timestamp', default = { raw = 'CURRENT_TIMESTAMP' } },
+        },
+        primary = { 'id' },
+        indexes = { { name = 'idx_citizen', columns = { 'citizenid', 'created_at' }, unique = false } },
+        foreign = { { name = 'fk_orders_player', columns = { 'citizenid' }, ref_table = 'players',
+                      ref_columns = { 'citizenid' }, on_delete = 'SET NULL' } },
+        seed = { rows = { { id = 1, status = 'open' } } },   -- INSERT IGNORE; seed.update = true to upsert
+    },
+})
+```
+
+Columns are `NOT NULL` unless `null = true`. `default` takes a value,
+`Kora.sql.NULL`, or `{ raw = 'CURRENT_TIMESTAMP' }` (also `NOW()`); `on_update =
+'CURRENT_TIMESTAMP'` is supported. Enum/set types take a `values` list. All
+names and types are validated against a whitelist before any SQL is built, and
+seed values are bound parameters. Returns `{ table, created, added_columns,
+added_indexes, added_fks, seeded, warnings }` (a list of these for `ensureTables`).
+Optional spec features:
+- `extend = true` — the table belongs to someone else (e.g. `players`): only the listed columns, indexes, foreign keys and checks are added, the table is never created, and a missing table is an error. No `primary` or `seed`.
+- `columns[].generated = { expr = "...", stored = false }` — generated column (`STORED` unless `stored = false`). No default/auto_increment, nullability is implied.
+- `checks = { { name = 'chk_x', expr = '`amount` > 0' } }` — CHECK constraints.
+- `columns[].after = 'other'` positions a newly added column; `columns[].comment`, spec `comment`.
+- `columns[].modify = true` — opt in to `MODIFY COLUMN` when the existing type or nullability differs (e.g. widening an enum). Without it a difference is only a warning.
+- `seed.once = true` — only seed when this call created the table (first install). Without it the seed runs `INSERT IGNORE` every boot, which re-adds rows an admin deleted.
+- Unique constraints are indexes with `unique = true`.
+Expressions (`generated.expr`, `checks[].expr`) are developer-written SQL; `;` and comments are rejected.
+
+The report also carries `modified_columns` and `added_checks`.
+
+Use `migrate` for data migrations (UPDATE/DELETE backfills, dropping indexes or columns) — those are not declarative.
+
 ### Callback variants
 `Kora.sql.queryAsync(sql, params, cb)` and friends — `cb(result, errString)`, no
-coroutine required.
+coroutine required. `ensureTableAsync(spec, cb)` and `ensureTablesAsync(specs, cb)` too.
 
 ## oxmysql compat
 

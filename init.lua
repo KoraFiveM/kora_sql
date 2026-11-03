@@ -94,6 +94,16 @@ end
 function Kora.sql.upsert(table_, key, rows, opts) return await('upsert', table_, key, rows, opts) end
 function Kora.sql.migrate(resource, migrations)   return await('migrate', resource, migrations) end
 
+---Creates the table if missing, otherwise adds any missing columns, keys and foreign keys.
+---Existing columns are never altered; differences come back in `report.warnings`.
+---@param spec table `name`, `columns`, and optionally `primary`, `indexes`, `foreign`, `seed`, `engine`, `charset`, `collate`.
+---@return table? report `{ table, created, added_columns, added_indexes, added_fks, seeded, warnings }`
+---@return string? error
+function Kora.sql.ensureTable(spec)  return await('ensureTable', spec, GetCurrentResourceName()) end
+
+---Same as `ensureTable` for an ordered list, so foreign key parents can come first.
+function Kora.sql.ensureTables(specs) return await('ensureTables', specs, GetCurrentResourceName()) end
+
 ---Loads migration SQL from the consuming resource, fingerprints each file,
 ---and passes the prepared definitions to `Kora.sql.migrate`.
 ---@param resource string
@@ -165,3 +175,11 @@ Kora.sql.scalarAsync  = asyncVariant('scalar')
 Kora.sql.executeAsync = asyncVariant('execute')
 Kora.sql.insertAsync  = asyncVariant('insert')
 Kora.sql.updateAsync  = asyncVariant('update')
+
+function Kora.sql.ensureTableAsync(spec, cb)
+    exports.kora_sql:ensureTable(spec, cb, GetCurrentResourceName())
+end
+
+function Kora.sql.ensureTablesAsync(specs, cb)
+    exports.kora_sql:ensureTables(specs, cb, GetCurrentResourceName())
+end

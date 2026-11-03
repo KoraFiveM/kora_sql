@@ -19,6 +19,7 @@ const { createLegacyHousingBridge } = require('./legacy-housing');
 const { WriteQueue } = require('./queue');
 const { TransactionRunner } = require('./transaction');
 const { Migrator } = require('./migrate');
+const { SchemaManager } = require('./schema');
 const { register } = require('./exports');
 const { connectWithRetry } = require('./startup');
 const log = require('./logger');
@@ -104,6 +105,7 @@ async function boot() {
     api.queue = new WriteQueue(api.executor, pools, api.stats, cfg);
     api.txn = new TransactionRunner(pools);
     api.migrator = new Migrator(pools);
+    api.schema = new SchemaManager(pools);
 
     // Ensure the bookkeeping tables (qbsql_migrations, qbsql_deadletter) exist
     // before any resource migrates or any write can dead-letter.

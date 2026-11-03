@@ -245,6 +245,8 @@ function register(api, exports) {
     });
 
     dataExport('migrate', (resource, migrations) => api.migrator.migrate(resource, migrations));
+    dataExport('ensureTable', (spec, resource) => api.schema.ensureTable(spec, resource));
+    dataExport('ensureTables', (specs, resource) => api.schema.ensureTables(specs, resource));
     dataExport('prepareWarm', (sqlList) => api.prepareWarm(sqlList));
 
     exports('stats', (cb) => { const s = api.stats.summary(api.statements.summary()); if (cb) cb(s); return s; });

@@ -15,10 +15,6 @@ var require_logger = __commonJS({
       debugEnabled = !!on2;
     }
     __name(setDebug, "setDebug");
-    function ts() {
-      return (/* @__PURE__ */ new Date()).toISOString();
-    }
-    __name(ts, "ts");
     module2.exports = {
       setDebug,
       info(tag, msg) {
@@ -32,8 +28,7 @@ var require_logger = __commonJS({
       },
       debug(tag, msg) {
         if (debugEnabled) console.log(`^8[qbsql:${tag}:debug]^7 ${msg}`);
-      },
-      ts
+      }
     };
   }
 });
@@ -20886,7 +20881,7 @@ var require_stats = __commonJS({
         q.flushDurationMs.push(durationMs);
         if (q.flushDurationMs.length > 100) q.flushDurationMs.shift();
       }
-      countCrossing(rows) {
+      countCrossing() {
         this.queue.boundaryCrossings++;
       }
       slowQueries(limit) {
@@ -21089,6 +21084,11 @@ var require_execute3 = __commonJS({
       return { sql: out, params: normalized };
     }
     __name(normalizeNamedPlaceholders, "normalizeNamedPlaceholders");
+    function toParamSets(params) {
+      const normal = normalizeParams(params);
+      return Array.isArray(normal) && normal.length > 0 && normal.every(Array.isArray) ? normal.map(normalizeParams) : [normal];
+    }
+    __name(toParamSets, "toParamSets");
     var _Executor = class _Executor {
       constructor(pools, statements, stats, legacyInventory = null, legacyHousing = null) {
         this.pools = pools;
@@ -21125,7 +21125,7 @@ var require_execute3 = __commonJS({
         return this.pools.write;
       }
       _query(pool, sql, params) {
-        return this._oxTypeCast ? pool.query({ sql, values: params || [], typeCast }) : pool.query(sql, params || []);
+        return this._oxTypeCast ? pool.query({ sql, values: params, typeCast }) : pool.query(sql, params);
       }
       // The one true executor. Returns mysql2's raw [rows|result, fields] pair.
       // Keeping the pair until the final shape adapter is important for
@@ -21145,7 +21145,7 @@ var require_execute3 = __commonJS({
             result = [await legacy, void 0];
           } else if (this.statements.isPreparable(sql)) {
             try {
-              result = await (this._oxTypeCast ? pool.execute({ sql, values: params || [], typeCast: typeCastExecute }) : pool.execute(sql, params || []));
+              result = await (this._oxTypeCast ? pool.execute({ sql, values: params, typeCast: typeCastExecute }) : pool.execute(sql, params));
               this.statements.recordHit(sql);
             } catch (err) {
               if (isUnpreparableError(err)) {
@@ -21216,8 +21216,7 @@ var require_execute3 = __commonJS({
       // parameter lists, executes each set, and unpacks each response. This is
       // distinct from kora_sql's execute() OkPacket-shaped modern API.
       async prepare(sql, params, resource) {
-        const normal = normalizeParams(params);
-        const sets = Array.isArray(normal) && normal.length > 0 && normal.every(Array.isArray) ? normal.map(normalizeParams) : [normal];
+        const sets = toParamSets(params);
         const responses = [];
         for (const values of sets) {
           const result = await this.runOne(sql, values, resource);
@@ -21238,8 +21237,7 @@ var require_execute3 = __commonJS({
       // [result, fields] transport pair. Multiple row/result sets are flattened
       // the same way upstream appends them to its response array.
       async rawExecute(sql, params, resource) {
-        const normal = normalizeParams(params);
-        const sets = Array.isArray(normal) && normal.length > 0 && normal.every(Array.isArray) ? normal.map(normalizeParams) : [normal];
+        const sets = toParamSets(params);
         const responses = [];
         for (const values of sets) {
           const result = await this.runOne(sql, values, resource);
@@ -21430,10 +21428,7 @@ var require_batch = __commonJS({
       }
       const keyCols = Array.isArray(conflictKey) ? conflictKey : [conflictKey];
       const allCols = keyCols.concat(columns);
-      let effectiveRows = rows;
-      if (pad) {
-        effectiveRows = padRows(rows, bucketFor(rows.length));
-      }
+      const effectiveRows = pad ? padRows(rows, bucketFor(rows.length)) : rows;
       const placeholderGroup = "(" + allCols.map(() => "?").join(",") + ")";
       const valuesClause = new Array(effectiveRows.length).fill(placeholderGroup).join(",");
       const params = [];
@@ -21442,22 +21437,10 @@ var require_batch = __commonJS({
         for (const v of pkVals) params.push(v);
         for (const c of columns) params.push(row.cols[c]);
       }
-      let updateClause;
-      let aliasClause = "";
-      if (dialect === "alias") {
-        aliasClause = " AS `new`";
-        if (mode === "accumulate") {
-          updateClause = columns.map((c) => `${quoteIdent(c)} = ${quoteIdent(c)} + \`new\`.${quoteIdent(c)}`).join(", ");
-        } else {
-          updateClause = columns.map((c) => `${quoteIdent(c)} = \`new\`.${quoteIdent(c)}`).join(", ");
-        }
-      } else {
-        if (mode === "accumulate") {
-          updateClause = columns.map((c) => `${quoteIdent(c)} = ${quoteIdent(c)} + VALUES(${quoteIdent(c)})`).join(", ");
-        } else {
-          updateClause = columns.map((c) => `${quoteIdent(c)} = VALUES(${quoteIdent(c)})`).join(", ");
-        }
-      }
+      const alias = dialect === "alias";
+      const aliasClause = alias ? " AS `new`" : "";
+      const incoming = /* @__PURE__ */ __name((c) => alias ? `\`new\`.${quoteIdent(c)}` : `VALUES(${quoteIdent(c)})`, "incoming");
+      const updateClause = columns.map((c) => `${quoteIdent(c)} = ${mode === "accumulate" ? `${quoteIdent(c)} + ` : ""}${incoming(c)}`).join(", ");
       const colList = allCols.map(quoteIdent).join(",");
       const sql = `INSERT INTO ${quoteIdent(table)} (${colList}) VALUES ${valuesClause}${aliasClause} ON DUPLICATE KEY UPDATE ${updateClause}`;
       return { sql, params, rowCount: effectiveRows.length };
@@ -21592,7 +21575,7 @@ var require_queue = __commonJS({
       // Enqueue many rows in one call -- the single-boundary-crossing path.
       enqueueMany(table, conflictKey, rows, opts) {
         opts = opts || {};
-        this.stats.countCrossing(rows.length);
+        this.stats.countCrossing();
         for (const row of rows) {
           this.enqueue(table, conflictKey, row, opts);
         }
@@ -21686,7 +21669,7 @@ var require_queue = __commonJS({
                 }
               );
               try {
-                await this._writeWithRetry(table, sql, params, chunk, st.mode, g.columns);
+                await this._writeWithRetry(table, sql, params, chunk, st.mode);
                 statements++;
                 rowsWritten += rowCount;
               } catch (err) {
@@ -21727,7 +21710,7 @@ var require_queue = __commonJS({
           }
         }
       }
-      async _writeWithRetry(table, sql, params, chunk, mode, columns, attempt, reMerged) {
+      async _writeWithRetry(table, sql, params, chunk, mode, attempt, reMerged) {
         attempt = attempt || 0;
         try {
           await this.pools.write.execute(sql, normalizeWriteParams(params));
@@ -21758,7 +21741,7 @@ var require_queue = __commonJS({
           const backoff = Math.min(2e3, 50 * Math.pow(2, attempt));
           log2.warn("queue", `write failed on ${table} (attempt ${attempt + 1}), retrying in ${backoff}ms: ${err.message}`);
           await new Promise((r) => setTimeout(r, backoff));
-          await this._writeWithRetry(table, sql, params, chunk, mode, columns, attempt + 1, reMerged);
+          await this._writeWithRetry(table, sql, params, chunk, mode, attempt + 1, reMerged);
         }
       }
       async _deadLetter(table, chunk, err) {
@@ -22174,6 +22157,471 @@ CREATE TABLE IF NOT EXISTS \`qbsql_deadletter\` (
   }
 });
 
+// node_modules/mysql2/lib/server.js
+var require_server = __commonJS({
+  "node_modules/mysql2/lib/server.js"(exports2, module2) {
+    "use strict";
+    var net = require("net");
+    var EventEmitter = require("events").EventEmitter;
+    var Connection = require_connection3();
+    var ConnectionConfig = require_connection_config();
+    var _Server = class _Server extends EventEmitter {
+      constructor() {
+        super();
+        this.connections = [];
+        this._server = net.createServer(this._handleConnection.bind(this));
+      }
+      _handleConnection(socket) {
+        const connectionConfig = new ConnectionConfig({
+          stream: socket,
+          isServer: true
+        });
+        const connection = new Connection({ config: connectionConfig });
+        this.emit("connection", connection);
+      }
+      listen(port) {
+        this._port = port;
+        this._server.listen.apply(this._server, arguments);
+        return this;
+      }
+      close(cb) {
+        this._server.close(cb);
+      }
+    };
+    __name(_Server, "Server");
+    var Server = _Server;
+    module2.exports = Server;
+  }
+});
+
+// node_modules/mysql2/lib/auth_plugins/index.js
+var require_auth_plugins = __commonJS({
+  "node_modules/mysql2/lib/auth_plugins/index.js"(exports2, module2) {
+    "use strict";
+    module2.exports = {
+      caching_sha2_password: require_caching_sha2_password(),
+      mysql_clear_password: require_mysql_clear_password(),
+      mysql_native_password: require_mysql_native_password(),
+      sha256_password: require_sha256_password()
+    };
+  }
+});
+
+// node_modules/mysql2/index.js
+var require_mysql2 = __commonJS({
+  "node_modules/mysql2/index.js"(exports2) {
+    "use strict";
+    var SqlString = require_lib();
+    var ConnectionConfig = require_connection_config();
+    var parserCache = require_parser_cache();
+    var Connection = require_connection3();
+    exports2.createConnection = require_create_connection();
+    exports2.connect = exports2.createConnection;
+    exports2.Connection = Connection;
+    exports2.ConnectionConfig = ConnectionConfig;
+    var Pool = require_pool3();
+    var PoolCluster = require_pool_cluster();
+    var createPool = require_create_pool();
+    var createPoolCluster = require_create_pool_cluster();
+    exports2.createPool = createPool;
+    exports2.createPoolCluster = createPoolCluster;
+    exports2.createQuery = Connection.createQuery;
+    exports2.Pool = Pool;
+    exports2.PoolCluster = PoolCluster;
+    exports2.createServer = function(handler) {
+      const Server = require_server();
+      const s = new Server();
+      if (handler) {
+        s.on("connection", handler);
+      }
+      return s;
+    };
+    exports2.PoolConnection = require_pool_connection2();
+    exports2.authPlugins = require_auth_plugins();
+    exports2.escape = SqlString.escape;
+    exports2.escapeId = SqlString.escapeId;
+    exports2.format = SqlString.format;
+    exports2.raw = SqlString.raw;
+    exports2.__defineGetter__(
+      "createConnectionPromise",
+      () => require_promise().createConnection
+    );
+    exports2.__defineGetter__(
+      "createPoolPromise",
+      () => require_promise().createPool
+    );
+    exports2.__defineGetter__(
+      "createPoolClusterPromise",
+      () => require_promise().createPoolCluster
+    );
+    exports2.__defineGetter__("Types", () => require_types());
+    exports2.__defineGetter__(
+      "TypedParameter",
+      () => require_typed_parameter().types
+    );
+    exports2.__defineGetter__(
+      "Charsets",
+      () => require_charsets()
+    );
+    exports2.__defineGetter__(
+      "CharsetToEncoding",
+      () => require_charset_encodings()
+    );
+    exports2.setMaxParserCache = function(max) {
+      parserCache.setMaxCache(max);
+    };
+    exports2.clearParserCache = function() {
+      parserCache.clearCache();
+    };
+  }
+});
+
+// server/js/schema.js
+var require_schema = __commonJS({
+  "server/js/schema.js"(exports2, module2) {
+    "use strict";
+    var { escape } = require_mysql2();
+    var log2 = require_logger();
+    var NULL_SENTINEL = "\0qbsql:null\0";
+    var IDENT = /^[A-Za-z0-9_]{1,64}$/;
+    var BASE_TYPE = /^(?:(?:tiny|small|medium|big)?int(?:\(\d{1,2}\))?|integer|decimal\(\d{1,2}(?:,\d{1,2})?\)|numeric\(\d{1,2}(?:,\d{1,2})?\)|float|double|(?:var)?char\(\d{1,5}\)|(?:var)?binary\(\d{1,5}\)|tinytext|text|mediumtext|longtext|tinyblob|blob|mediumblob|longblob|json|date|time(?:\(\d\))?|datetime(?:\(\d\))?|timestamp(?:\(\d\))?|year|boolean|bool|enum|set)$/i;
+    var RAW_DEFAULT = /^(?:CURRENT_TIMESTAMP|NOW|LOCALTIMESTAMP)(?:\(\d?\))?$/i;
+    var EXPRESSION_BANNED = /;|--|\/\*|\*\//;
+    var FK_ACTIONS = /* @__PURE__ */ new Set(["CASCADE", "SET NULL", "RESTRICT", "NO ACTION", "SET DEFAULT"]);
+    var COLLATION = /^[a-z0-9_]{1,64}$/i;
+    var q = /* @__PURE__ */ __name((name) => "`" + name + "`", "q");
+    var list = /* @__PURE__ */ __name((names) => names.map(q).join(", "), "list");
+    function assertIdent(value, what) {
+      if (typeof value !== "string" || !IDENT.test(value)) throw new Error(`qbsql schema: invalid ${what} '${value}'`);
+    }
+    __name(assertIdent, "assertIdent");
+    function assertExpression(value, what) {
+      if (typeof value !== "string" || value.trim() === "" || EXPRESSION_BANNED.test(value)) throw new Error(`qbsql schema: invalid ${what}`);
+    }
+    __name(assertExpression, "assertExpression");
+    function assertNames(value, what) {
+      if (!Array.isArray(value) || value.length === 0) throw new Error(`qbsql schema: ${what} must be a non-empty list`);
+      value.forEach((name) => assertIdent(name, what));
+    }
+    __name(assertNames, "assertNames");
+    function validateSpec(input, defaults = {}) {
+      if (!input || typeof input !== "object") throw new Error("qbsql schema: spec must be a table");
+      assertIdent(input.name, "table name");
+      if (!Array.isArray(input.columns) || input.columns.length === 0) {
+        throw new Error(`qbsql schema: '${input.name}' needs at least one column`);
+      }
+      const spec = {
+        name: input.name,
+        engine: input.engine || defaults.engine || "InnoDB",
+        charset: input.charset || defaults.charset || "utf8mb4",
+        collate: input.collate || defaults.collate || null,
+        columns: [],
+        primary: input.primary || null,
+        indexes: input.indexes || [],
+        foreign: input.foreign || [],
+        checks: input.checks || [],
+        extend: input.extend === true,
+        comment: input.comment,
+        seed: input.seed || null
+      };
+      assertIdent(spec.engine, "engine");
+      assertIdent(spec.charset, "charset");
+      if (spec.collate !== null && !COLLATION.test(spec.collate)) throw new Error(`qbsql schema: invalid collation '${spec.collate}'`);
+      const seen = /* @__PURE__ */ new Set();
+      for (const col of input.columns) {
+        assertIdent(col && col.name, "column name");
+        if (seen.has(col.name)) throw new Error(`qbsql schema: duplicate column '${col.name}' in '${spec.name}'`);
+        seen.add(col.name);
+        if (typeof col.type !== "string" || !BASE_TYPE.test(col.type)) {
+          throw new Error(`qbsql schema: unsupported type '${col.type}' for ${spec.name}.${col.name}`);
+        }
+        const base = col.type.toLowerCase();
+        if ((base === "enum" || base === "set") && (!Array.isArray(col.values) || col.values.length === 0 || col.values.some((v) => typeof v !== "string"))) {
+          throw new Error(`qbsql schema: ${spec.name}.${col.name} needs a 'values' list`);
+        }
+        if (col.collate !== void 0 && !COLLATION.test(col.collate)) throw new Error(`qbsql schema: invalid collation for ${spec.name}.${col.name}`);
+        if (col.on_update !== void 0 && !RAW_DEFAULT.test(String(col.on_update))) {
+          throw new Error(`qbsql schema: unsupported on_update for ${spec.name}.${col.name}`);
+        }
+        if (col.default && typeof col.default === "object" && !RAW_DEFAULT.test(String(col.default.raw))) {
+          throw new Error(`qbsql schema: unsupported raw default for ${spec.name}.${col.name}`);
+        }
+        if (col.generated !== void 0) {
+          assertExpression(col.generated.expr, `generated expression for ${spec.name}.${col.name}`);
+          if (col.default !== void 0 || col.auto_increment) throw new Error(`qbsql schema: generated column ${spec.name}.${col.name} cannot have a default or auto_increment`);
+        }
+        if (col.after !== void 0) assertIdent(col.after, "after column");
+        if (col.comment !== void 0 && typeof col.comment !== "string") throw new Error(`qbsql schema: invalid comment for ${spec.name}.${col.name}`);
+        spec.columns.push(col);
+      }
+      if (spec.extend && (spec.primary || spec.seed)) throw new Error(`qbsql schema: extend table '${spec.name}' cannot declare a primary key or seed rows`);
+      if (spec.comment !== void 0 && typeof spec.comment !== "string") throw new Error(`qbsql schema: invalid comment for '${spec.name}'`);
+      for (const check of spec.checks) {
+        assertIdent(check.name, "check name");
+        assertExpression(check.expr, `check expression '${check.name}'`);
+      }
+      if (spec.primary) {
+        assertNames(spec.primary, "primary key column");
+        spec.primary.forEach((c) => {
+          if (!seen.has(c)) throw new Error(`qbsql schema: primary key column '${c}' is not in '${spec.name}'`);
+        });
+      }
+      for (const idx of spec.indexes) {
+        assertIdent(idx.name, "index name");
+        assertNames(idx.columns, "index column");
+        idx.columns.forEach((c) => {
+          if (!seen.has(c)) throw new Error(`qbsql schema: index '${idx.name}' column '${c}' is not in '${spec.name}'`);
+        });
+      }
+      for (const fk of spec.foreign) {
+        assertIdent(fk.name, "foreign key name");
+        assertIdent(fk.ref_table, "foreign key table");
+        assertNames(fk.columns, "foreign key column");
+        assertNames(fk.ref_columns, "foreign key reference column");
+        fk.columns.forEach((c) => {
+          if (!seen.has(c)) throw new Error(`qbsql schema: foreign key '${fk.name}' column '${c}' is not in '${spec.name}'`);
+        });
+        for (const key of ["on_delete", "on_update"]) {
+          if (fk[key] !== void 0 && !FK_ACTIONS.has(String(fk[key]).toUpperCase())) {
+            throw new Error(`qbsql schema: invalid ${key} for foreign key '${fk.name}'`);
+          }
+        }
+      }
+      if (spec.seed) {
+        if (!Array.isArray(spec.seed.rows)) throw new Error(`qbsql schema: seed.rows for '${spec.name}' must be a list`);
+        spec.seed.rows.forEach((row) => Object.keys(row).forEach((c) => {
+          if (!seen.has(c)) throw new Error(`qbsql schema: seed column '${c}' is not in '${spec.name}'`);
+        }));
+      }
+      return spec;
+    }
+    __name(validateSpec, "validateSpec");
+    function expectedType(col) {
+      let type = col.type.toLowerCase();
+      if (type === "enum" || type === "set") type += "(" + col.values.map((v) => escape(v)).join(",") + ")";
+      if (col.unsigned) type += " unsigned";
+      return normaliseType(type);
+    }
+    __name(expectedType, "expectedType");
+    function normaliseType(type) {
+      return String(type).toLowerCase().replace(/^(?:boolean|bool)$/, "tinyint(1)").replace(/\b(smallint|mediumint|bigint|int|integer)\(\d+\)/g, "$1").replace(/\btinyint\((?!1\))\d+\)/g, "tinyint").replace(/\binteger\b/, "int").replace(/\s+/g, " ").trim();
+    }
+    __name(normaliseType, "normaliseType");
+    function typeMatches(want, got) {
+      return want === got || want === "json" && got === "longtext";
+    }
+    __name(typeMatches, "typeMatches");
+    function columnDefinition(col, spec) {
+      const parts = [q(col.name), col.type.toLowerCase() === "enum" || col.type.toLowerCase() === "set" ? `${col.type.toLowerCase()}(${col.values.map((v) => escape(v)).join(",")})` : col.type.toLowerCase()];
+      if (col.unsigned) parts.push("UNSIGNED");
+      const collate = col.collate || (spec.collate && /char|text|enum|set/i.test(col.type) ? spec.collate : null);
+      if (collate) parts.push(`COLLATE ${collate}`);
+      if (col.generated) {
+        parts.push(`GENERATED ALWAYS AS (${col.generated.expr}) ${col.generated.stored === false ? "VIRTUAL" : "STORED"}`);
+      } else {
+        parts.push(col.null === true ? "NULL" : "NOT NULL");
+        if (col.auto_increment) parts.push("AUTO_INCREMENT");
+        if (col.default !== void 0) {
+          if (col.default === NULL_SENTINEL || col.default === null) parts.push("DEFAULT NULL");
+          else if (typeof col.default === "object") parts.push(`DEFAULT ${String(col.default.raw).toUpperCase()}`);
+          else parts.push(`DEFAULT ${escape(col.default)}`);
+        }
+        if (col.on_update) parts.push(`ON UPDATE ${String(col.on_update).toUpperCase()}`);
+      }
+      if (col.comment) parts.push(`COMMENT ${escape(col.comment)}`);
+      return parts.join(" ");
+    }
+    __name(columnDefinition, "columnDefinition");
+    var indexDefinition = /* @__PURE__ */ __name((idx) => `${idx.unique ? "UNIQUE " : ""}KEY ${q(idx.name)} (${list(idx.columns)})`, "indexDefinition");
+    function foreignDefinition(fk) {
+      let sql = `CONSTRAINT ${q(fk.name)} FOREIGN KEY (${list(fk.columns)}) REFERENCES ${q(fk.ref_table)} (${list(fk.ref_columns)})`;
+      if (fk.on_delete) sql += ` ON DELETE ${String(fk.on_delete).toUpperCase()}`;
+      if (fk.on_update) sql += ` ON UPDATE ${String(fk.on_update).toUpperCase()}`;
+      return sql;
+    }
+    __name(foreignDefinition, "foreignDefinition");
+    var checkDefinition = /* @__PURE__ */ __name((check) => `CONSTRAINT ${q(check.name)} CHECK (${check.expr})`, "checkDefinition");
+    function buildCreate(spec) {
+      const lines = spec.columns.map((c) => columnDefinition(c, spec));
+      if (spec.primary) lines.push(`PRIMARY KEY (${list(spec.primary)})`);
+      spec.indexes.forEach((idx) => lines.push(indexDefinition(idx)));
+      spec.foreign.forEach((fk) => lines.push(foreignDefinition(fk)));
+      spec.checks.forEach((check) => lines.push(checkDefinition(check)));
+      let sql = `CREATE TABLE IF NOT EXISTS ${q(spec.name)} (
+  ${lines.join(",\n  ")}
+) ENGINE=${spec.engine} DEFAULT CHARSET=${spec.charset}`;
+      if (spec.collate) sql += ` COLLATE=${spec.collate}`;
+      if (spec.comment) sql += ` COMMENT=${escape(spec.comment)}`;
+      return sql;
+    }
+    __name(buildCreate, "buildCreate");
+    function diff(spec, actual) {
+      const statements = [];
+      const added = { columns: [], modified: [], indexes: [], foreign: [], checks: [] };
+      const warnings = [];
+      const alter = /* @__PURE__ */ __name((clause) => `ALTER TABLE ${q(spec.name)} ${clause}`, "alter");
+      const have = new Map(actual.columns.map((c) => [c.COLUMN_NAME.toLowerCase(), c]));
+      for (const col of spec.columns) {
+        const existing = have.get(col.name.toLowerCase());
+        if (!existing) {
+          statements.push(alter(`ADD COLUMN ${columnDefinition(col, spec)}${col.after ? ` AFTER ${q(col.after)}` : ""}`));
+          added.columns.push(col.name);
+          continue;
+        }
+        const want = expectedType(col);
+        const got = normaliseType(existing.COLUMN_TYPE);
+        const wantNull = col.null === true;
+        const typeDiffers = !typeMatches(want, got);
+        const nullDiffers = !col.generated && wantNull !== (existing.IS_NULLABLE === "YES");
+        if (col.modify === true && !col.generated && (typeDiffers || nullDiffers)) {
+          statements.push(alter(`MODIFY COLUMN ${columnDefinition(col, spec)}`));
+          added.modified.push(col.name);
+          continue;
+        }
+        if (typeDiffers) warnings.push(`${spec.name}.${col.name}: type is '${existing.COLUMN_TYPE}', schema expects '${want}' (not altered)`);
+        if (nullDiffers) warnings.push(`${spec.name}.${col.name}: nullability differs from schema (not altered)`);
+        const wantCollate = col.collate || (/char|text|enum|set/i.test(col.type) ? spec.collate : null);
+        if (wantCollate && existing.COLLATION_NAME && existing.COLLATION_NAME.toLowerCase() !== wantCollate.toLowerCase()) {
+          warnings.push(`${spec.name}.${col.name}: collation is '${existing.COLLATION_NAME}', schema expects '${wantCollate}' (not altered)`);
+        }
+      }
+      const indexNames = new Set(actual.indexes.map((i) => i.INDEX_NAME.toLowerCase()));
+      if (spec.primary && !indexNames.has("primary")) {
+        statements.push(alter(`ADD PRIMARY KEY (${list(spec.primary)})`));
+        added.indexes.push("PRIMARY");
+      }
+      for (const idx of spec.indexes) {
+        if (indexNames.has(idx.name.toLowerCase())) continue;
+        statements.push(alter(`ADD ${indexDefinition(idx)}`));
+        added.indexes.push(idx.name);
+      }
+      const fkNames = new Set(actual.foreign.map((f) => f.CONSTRAINT_NAME.toLowerCase()));
+      for (const fk of spec.foreign) {
+        if (fkNames.has(fk.name.toLowerCase())) continue;
+        statements.push(alter(`ADD ${foreignDefinition(fk)}`));
+        added.foreign.push(fk.name);
+      }
+      const checkNames = new Set((actual.checks || []).map((c) => c.CONSTRAINT_NAME.toLowerCase()));
+      for (const check of spec.checks) {
+        if (checkNames.has(check.name.toLowerCase())) continue;
+        statements.push(alter(`ADD ${checkDefinition(check)}`));
+        added.checks.push(check.name);
+      }
+      return { statements, added, warnings };
+    }
+    __name(diff, "diff");
+    function buildSeed(spec) {
+      if (!spec.seed || spec.seed.rows.length === 0) return null;
+      const columns = spec.columns.map((c) => c.name).filter((name) => spec.seed.rows.some((r) => r[name] !== void 0));
+      const values = [];
+      const placeholders = spec.seed.rows.map((row) => "(" + columns.map((name) => {
+        if (row[name] === void 0) return "DEFAULT";
+        values.push(row[name] === NULL_SENTINEL ? null : row[name]);
+        return "?";
+      }).join(", ") + ")");
+      let sql;
+      if (spec.seed.update) {
+        const key = new Set(spec.seed.key || spec.primary || []);
+        const updatable = columns.filter((c) => !key.has(c));
+        if (updatable.length === 0) throw new Error(`qbsql schema: seed.update on '${spec.name}' has no non-key columns`);
+        sql = `INSERT INTO ${q(spec.name)} (${list(columns)}) VALUES ${placeholders.join(", ")} ON DUPLICATE KEY UPDATE ${updatable.map((c) => `${q(c)} = VALUES(${q(c)})`).join(", ")}`;
+      } else {
+        sql = `INSERT IGNORE INTO ${q(spec.name)} (${list(columns)}) VALUES ${placeholders.join(", ")}`;
+      }
+      return { sql, values };
+    }
+    __name(buildSeed, "buildSeed");
+    var ddl = /* @__PURE__ */ __name((sql) => ({ sql, namedPlaceholders: false }), "ddl");
+    var _SchemaManager = class _SchemaManager {
+      constructor(pools, defaults = {}) {
+        this.pools = pools;
+        this.defaults = defaults;
+        this._tails = /* @__PURE__ */ new Map();
+      }
+      // Serialise work per table so two resources racing on the same table do not interleave DDL.
+      _serial(name, fn) {
+        const tail = (this._tails.get(name) || Promise.resolve()).catch(() => {
+        });
+        const run = tail.then(fn);
+        this._tails.set(name, run);
+        return run;
+      }
+      async _inspect(name) {
+        const db = this.pools.write;
+        const [tables] = await db.query(
+          "SELECT 1 FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?",
+          [name]
+        );
+        if (tables.length === 0) return null;
+        const [columns] = await db.query(
+          "SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLLATION_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?",
+          [name]
+        );
+        const [indexes] = await db.query(
+          "SELECT INDEX_NAME, COLUMN_NAME, SEQ_IN_INDEX, NON_UNIQUE FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?",
+          [name]
+        );
+        const [foreign] = await db.query(
+          "SELECT CONSTRAINT_NAME FROM information_schema.TABLE_CONSTRAINTS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND CONSTRAINT_TYPE = 'FOREIGN KEY'",
+          [name]
+        );
+        const [checks] = await db.query(
+          "SELECT CONSTRAINT_NAME FROM information_schema.TABLE_CONSTRAINTS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND CONSTRAINT_TYPE = 'CHECK'",
+          [name]
+        );
+        return { columns, indexes, foreign, checks };
+      }
+      async ensureTable(input, resource) {
+        const spec = validateSpec(input, this.defaults);
+        return this._serial(spec.name, async () => {
+          const report = { table: spec.name, created: false, added_columns: [], modified_columns: [], added_indexes: [], added_fks: [], added_checks: [], seeded: 0, warnings: [] };
+          const actual = await this._inspect(spec.name);
+          if (!actual && spec.extend) {
+            throw new Error(`qbsql schema: table '${spec.name}' does not exist, so ${resource || "the caller"} cannot extend it`);
+          }
+          if (!actual) {
+            await this.pools.write.query(ddl(buildCreate(spec)));
+            report.created = true;
+            log2.info("schema", `${resource || "unknown"}: created table ${spec.name}`);
+          } else {
+            const result = diff(spec, actual);
+            for (const stmt of result.statements) await this.pools.write.query(ddl(stmt));
+            report.added_columns = result.added.columns;
+            report.modified_columns = result.added.modified;
+            report.added_checks = result.added.checks;
+            report.added_indexes = result.added.indexes;
+            report.added_fks = result.added.foreign;
+            report.warnings = result.warnings;
+            const changes = result.statements.length;
+            if (changes > 0) log2.info("schema", `${resource || "unknown"}: ${spec.name} updated (${changes} addition${changes === 1 ? "" : "s"})`);
+            if (result.warnings.length > 0) {
+              const shown = result.warnings.slice(0, 3).join("; ");
+              const more = result.warnings.length > 3 ? ` (+${result.warnings.length - 3} more in the report)` : "";
+              log2.warn("schema", `${resource || "unknown"}: ${spec.name} differs from its schema in ${result.warnings.length} place(s), nothing altered: ${shown}${more}`);
+            }
+          }
+          const seed = spec.seed && spec.seed.once && !report.created ? null : buildSeed(spec);
+          if (seed) {
+            const [res] = await this.pools.write.query(seed.sql, seed.values);
+            report.seeded = res && res.affectedRows || 0;
+          }
+          return report;
+        });
+      }
+      // Runs in order so foreign key parents can be listed first. Stops at the first failure.
+      async ensureTables(specs, resource) {
+        if (!Array.isArray(specs)) throw new Error("qbsql schema: ensureTables expects a list of table specs");
+        const reports = [];
+        for (const spec of specs) reports.push(await this.ensureTable(spec, resource));
+        return reports;
+      }
+    };
+    __name(_SchemaManager, "SchemaManager");
+    var SchemaManager2 = _SchemaManager;
+    module2.exports = { SchemaManager: SchemaManager2, validateSpec, buildCreate, buildSeed, diff, NULL_SENTINEL };
+  }
+});
+
 // server/js/exports.js
 var require_exports = __commonJS({
   "server/js/exports.js"(exports2, module2) {
@@ -22343,6 +22791,8 @@ var require_exports = __commonJS({
         api2.ready().then(() => api2.queue.flush(table)).then(() => reply("flush", cb, true, null)).catch((e) => reply("flush", cb, false, String(e.message)));
       });
       dataExport("migrate", (resource, migrations) => api2.migrator.migrate(resource, migrations));
+      dataExport("ensureTable", (spec, resource) => api2.schema.ensureTable(spec, resource));
+      dataExport("ensureTables", (specs, resource) => api2.schema.ensureTables(specs, resource));
       dataExport("prepareWarm", (sqlList) => api2.prepareWarm(sqlList));
       exports3("stats", (cb) => {
         const s = api2.stats.summary(api2.statements.summary());
@@ -22426,6 +22876,7 @@ var { createLegacyHousingBridge } = require_legacy_housing();
 var { WriteQueue } = require_queue();
 var { TransactionRunner } = require_transaction();
 var { Migrator } = require_migrate();
+var { SchemaManager } = require_schema();
 var { register } = require_exports();
 var { connectWithRetry } = require_startup();
 var log = require_logger();
@@ -22511,6 +22962,7 @@ async function boot() {
   api.queue = new WriteQueue(api.executor, pools, api.stats, cfg);
   api.txn = new TransactionRunner(pools);
   api.migrator = new Migrator(pools);
+  api.schema = new SchemaManager(pools);
   await api.migrator._bootstrap();
   api._ready = true;
   api._readyResolve(true);
@@ -22518,7 +22970,7 @@ async function boot() {
   log.info("index", "ready.");
 }
 __name(boot, "boot");
-var registerExport = typeof globalThis !== "undefined" && typeof globalThis.exports === "function" ? globalThis.exports : typeof exports === "function" ? exports : null;
+var registerExport = typeof globalThis.exports === "function" ? globalThis.exports : typeof exports === "function" ? exports : null;
 if (!registerExport) {
   log.error("index", "FiveM export registrar not found on `exports`/`globalThis.exports` -- cannot register the API.");
 } else {
@@ -22529,7 +22981,7 @@ boot().catch((err) => {
   log.error("index", `FAILED TO START: ${err.message}`);
   log.error("index", err.stack || "");
   api._ready = false;
-  if (api._readyReject) api._readyReject(err);
+  api._readyReject(err);
 });
 on("onResourceStop", (resourceName) => {
   if (resourceName !== GetCurrentResourceName()) return;

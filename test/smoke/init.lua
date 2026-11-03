@@ -60,4 +60,24 @@ harness.test('checked transaction and recovery wrappers preserve operation conte
     harness.assertEqual(call.args[1], 'qbhousing:')
 end)
 
+harness.test('ensureTable and ensureTables pass the spec and calling resource to the driver', function()
+    local spec = { name = 'demo_t', columns = { { name = 'id', type = 'int' } } }
+    local result, err = Kora.sql.ensureTable(spec)
+    harness.assertTrue(result ~= nil, tostring(err))
+    local call = net.lastCall('ensureTable')
+    harness.assertEqual(call.args[1], spec)
+    harness.assertEqual(call.args[2], 'consumer-under-test')
+
+    Kora.sql.ensureTables({ spec })
+    call = net.lastCall('ensureTables')
+    harness.assertEqual(call.args[1][1], spec)
+    harness.assertEqual(call.args[2], 'consumer-under-test')
+
+    local got
+    Kora.sql.ensureTableAsync(spec, function(report) got = report end)
+    harness.assertTrue(got ~= nil)
+    call = net.lastCall('ensureTable')
+    harness.assertEqual(call.args[3], 'consumer-under-test')
+end)
+
 harness.report('init')
