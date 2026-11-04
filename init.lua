@@ -92,8 +92,6 @@ function Kora.sql.awaitCheckedOperations(prefix)
     return await('awaitCheckedOperations', prefix)
 end
 function Kora.sql.upsert(table_, key, rows, opts) return await('upsert', table_, key, rows, opts) end
-function Kora.sql.migrate(resource, migrations)   return await('migrate', resource, migrations) end
-
 ---Creates the table if missing, otherwise adds any missing columns, keys and foreign keys.
 ---Existing columns are never altered; differences come back in `report.warnings`.
 ---@param spec table `name`, `columns`, and optionally `primary`, `indexes`, `foreign`, `seed`, `engine`, `charset`, `collate`.
@@ -104,45 +102,6 @@ function Kora.sql.ensureTable(spec)  return await('ensureTable', spec, GetCurren
 ---Same as `ensureTable` for an ordered list, so foreign key parents can come first.
 function Kora.sql.ensureTables(specs) return await('ensureTables', specs, GetCurrentResourceName()) end
 
----Loads migration SQL from the consuming resource, fingerprints each file,
----and passes the prepared definitions to `Kora.sql.migrate`.
----@param resource string
----@param migrations table[] Each entry requires `version`, `name`, and `file`; other migration fields are preserved.
----@param checksumFn? fun(sql: string): string Defaults to Kora.util.fnv1a.
----@return any applied
----@return string? error
-function Kora.sql.migrateFiles(resource, migrations, checksumFn)
-    assert(type(resource) == 'string' and resource ~= '', 'Kora.sql.migrateFiles requires a resource name.')
-    assert(type(migrations) == 'table' and #migrations > 0, 'Kora.sql.migrateFiles requires a non-empty migration list.')
-
-    checksumFn = checksumFn or Kora.util.fnv1a
-    assert(type(checksumFn) == 'function', 'Kora.sql.migrateFiles checksumFn must be a function.')
-
-    local prepared = {}
-    for index = 1, #migrations do
-        local definition = migrations[index]
-        assert(type(definition) == 'table', ('Migration %d must be a table.'):format(index))
-        assert(type(definition.file) == 'string' and definition.file ~= '',
-            ('Migration %d requires a file path.'):format(index))
-
-        local sql = LoadResourceFile(resource, definition.file)
-        if not sql then
-            return nil, ('missing migration file %s'):format(definition.file)
-        end
-
-        local migration = {}
-        for key, value in pairs(definition) do
-            if key ~= 'file' then migration[key] = value end
-        end
-        migration.sql = sql
-        migration.checksum = migration.checksum or checksumFn(sql)
-        assert(type(migration.checksum) == 'string' and migration.checksum ~= '',
-            ('Migration %d checksum must be a non-empty string.'):format(index))
-        prepared[#prepared + 1] = migration
-    end
-
-    return Kora.sql.migrate(resource, prepared)
-end
 function Kora.sql.stats()               return exports.kora_sql:stats() end
 
 -- The FIRE-AND-FORGET path. These NEVER yield -- they hand rows to the JS queue

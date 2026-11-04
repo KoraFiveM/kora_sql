@@ -12,39 +12,7 @@ Kora = {
     },
 }
 
-local files = {
-    ['demo:sql/001.sql'] = 'SELECT 1;',
-}
-
-function _G.LoadResourceFile(resource, path)
-    return files[resource .. ':' .. path]
-end
-
 dofile(repoRoot .. 'init.lua')
-
-harness.test('migrateFiles loads and fingerprints migration files', function()
-    local result, err = Kora.sql.migrateFiles('demo', {
-        { version = 1, name = 'core', file = 'sql/001.sql', acceptedChecksums = { 'old' } },
-    })
-    harness.assertTrue(result ~= nil, tostring(err))
-
-    local call = net.lastCall('migrate')
-    harness.assertEqual(call.args[1], 'demo')
-    harness.assertEqual(call.args[2][1].sql, 'SELECT 1;')
-    harness.assertEqual(call.args[2][1].checksum, 'sum:SELECT 1;')
-    harness.assertEqual(call.args[2][1].file, nil)
-    harness.assertEqual(call.args[2][1].acceptedChecksums[1], 'old')
-end)
-
-harness.test('migrateFiles reports a missing file without calling the driver', function()
-    local before = #net.jsCalls
-    local result, err = Kora.sql.migrateFiles('demo', {
-        { version = 2, name = 'missing', file = 'sql/002.sql' },
-    })
-    harness.assertEqual(result, nil)
-    harness.assertTrue(err:find('sql/002.sql', 1, true) ~= nil)
-    harness.assertEqual(#net.jsCalls, before)
-end)
 
 harness.test('checked transaction and recovery wrappers preserve operation context', function()
     Kora.sql.transactionChecked({ { query = 'UPDATE receipt', expectedRows = 1 } }, { key = 'claim', fingerprint = 'terms', citizenids = { 'CID' } })

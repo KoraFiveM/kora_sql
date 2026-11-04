@@ -93,10 +93,8 @@ variants (`oxQuery`, `oxSingle`, `oxScalar`, `oxInsert`, `oxUpdate`, `oxPrepare`
 - Raw connection handles (no such API; the refusal points at `transaction`).
 The first `*Sync` use per calling resource prints once, naming the resource.
 
-## Migrations
-kora_sql owns the runner (`server/js/migrate.js`); each resource owns its files. A
-checksum mismatch on an already-applied version is a **hard boot abort** — never
-a warning. `qbsql_migrations` and `qbsql_deadletter` are bootstrapped at boot.
+## Schema
+There is no migration runner. Resources declare tables in Lua and `Kora.sql.ensureTable(s)` (`server/js/schema.js`) creates missing tables and only adds missing columns, indexes, foreign keys and checks; it never alters or drops. `qbsql_deadletter` is created the same way at boot.
 
 ## Build and distribution
 Like oxmysql, kora_sql ships one server bundle containing mysql2. Run `yarn build`

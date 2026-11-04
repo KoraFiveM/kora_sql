@@ -244,7 +244,6 @@ function register(api, exports) {
             .catch((e) => reply('flush', cb, false, String(e.message)));
     });
 
-    dataExport('migrate', (resource, migrations) => api.migrator.migrate(resource, migrations));
     dataExport('ensureTable', (spec, resource) => api.schema.ensureTable(spec, resource));
     dataExport('ensureTables', (specs, resource) => api.schema.ensureTables(specs, resource));
     dataExport('prepareWarm', (sqlList) => api.prepareWarm(sqlList));

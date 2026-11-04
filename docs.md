@@ -121,16 +121,6 @@ Yields until the named table (or everything) has drained.
 ### Kora.sql.upsert(table, conflictKey, rows, opts) -> affectedRows
 Immediate awaited batched upsert (enqueueMany + flush in one call).
 
-### Kora.sql.migrate(resource, migrations) -> boolean, errString
-`migrations` = `{ {version=, name=, sql=, checksum=}, ... }`. A checksum mismatch
-on an already-applied version aborts. See kora_core's `sql/` for the pattern.
-
-### Kora.sql.migrateFiles(resource, migrations, checksumFn?) -> boolean, errString
-Loads `{version=, name=, file=}` entries with `LoadResourceFile`, calculates
-their checksums, and forwards them to `migrate`. `checksumFn` defaults to
-`Kora.util.fnv1a`; pass the resource's historical checksum function when an
-existing migration used another format.
-
 ### Kora.sql.ensureTable(spec) / Kora.sql.ensureTables(specs) -> report, errString
 Declare a table in Lua instead of shipping a `.sql` file. If the table is
 missing it is created (`CREATE TABLE IF NOT EXISTS`); if it exists, anything
@@ -178,7 +168,7 @@ Expressions (`generated.expr`, `checks[].expr`) are developer-written SQL; `;` a
 
 The report also carries `modified_columns` and `added_checks`.
 
-Use `migrate` for data migrations (UPDATE/DELETE backfills, dropping indexes or columns) — those are not declarative.
+There is no migration runner: the handler only creates missing tables and adds missing columns, indexes, foreign keys and checks. Anything that must convert, backfill or drop existing data has to be done by hand.
 
 ### Callback variants
 `Kora.sql.queryAsync(sql, params, cb)` and friends — `cb(result, errString)`, no

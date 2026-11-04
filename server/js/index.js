@@ -18,8 +18,21 @@ const { createLegacyInventoryBridge } = require('./legacy-inventory');
 const { createLegacyHousingBridge } = require('./legacy-housing');
 const { WriteQueue } = require('./queue');
 const { TransactionRunner } = require('./transaction');
-const { Migrator } = require('./migrate');
 const { SchemaManager } = require('./schema');
+
+const DEADLETTER_TABLE = {
+    name: 'qbsql_deadletter',
+    columns: [
+        { name: 'id', type: 'bigint', unsigned: true, auto_increment: true },
+        { name: 'table_name', type: 'varchar(64)' },
+        { name: 'pk', type: 'varchar(191)' },
+        { name: 'cols_json', type: 'longtext' },
+        { name: 'error', type: 'varchar(500)', null: true, default: null },
+        { name: 'failed_at', type: 'timestamp', default: { raw: 'CURRENT_TIMESTAMP' } },
+    ],
+    primary: ['id'],
+    indexes: [{ name: 'idx_deadletter_table', columns: ['table_name'] }],
+};
 const { register } = require('./exports');
 const { connectWithRetry } = require('./startup');
 const log = require('./logger');
@@ -104,12 +117,10 @@ async function boot() {
     api.executor = new Executor(pools, api.statements, api.stats, legacyInventory, legacyHousing);
     api.queue = new WriteQueue(api.executor, pools, api.stats, cfg);
     api.txn = new TransactionRunner(pools);
-    api.migrator = new Migrator(pools);
     api.schema = new SchemaManager(pools);
 
-    // Ensure the bookkeeping tables (qbsql_migrations, qbsql_deadletter) exist
-    // before any resource migrates or any write can dead-letter.
-    await api.migrator._bootstrap();
+    // The dead-letter table must exist before any write can dead-letter.
+    await api.schema.ensureTable(DEADLETTER_TABLE, 'kora_sql');
 
     api._ready = true;
     api._readyResolve(true);

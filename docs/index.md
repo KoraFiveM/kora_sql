@@ -181,8 +181,7 @@ Kora.sql.batch(statements)                      -- { {sql=, params=}, ... }; one
 Kora.sql.transaction(statements)                -- same, wrapped in BEGIN/COMMIT, rolls back on error
 Kora.sql.transaction(sql, paramSets)            -- oxmysql's "one query, many param sets" form
 Kora.sql.upsert(table, conflictKey, rows, opts) -- immediate awaited batched upsert (enqueueMany + flush in one call)
-Kora.sql.migrate(resource, migrations)          -- { {version=, name=, sql=, checksum=}, ... }
-Kora.sql.migrateFiles(resource, migrations, checksumFn?) -- loads {version=, name=, file=} definitions
+Kora.sql.ensureTables(specs)                   -- create missing tables, add missing columns/indexes/FKs (see docs.md)
 Kora.sql.flush(table?) -> boolean, errString    -- yields until the table (or everything) has drained
 Kora.sql.stats()                                -- query + queue counters (same data as `/qbsql stats`)
 Kora.sql.NULL                                   -- sentinel for an explicit SQL NULL bind value

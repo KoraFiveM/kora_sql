@@ -22026,137 +22026,6 @@ var require_transaction = __commonJS({
   }
 });
 
-// server/js/migrate.js
-var require_migrate = __commonJS({
-  "server/js/migrate.js"(exports2, module2) {
-    "use strict";
-    var log2 = require_logger();
-    function ddl(sql) {
-      return { sql, namedPlaceholders: false };
-    }
-    __name(ddl, "ddl");
-    var BOOTSTRAP = `
-CREATE TABLE IF NOT EXISTS \`qbsql_migrations\` (
-  \`resource\`    VARCHAR(64)  NOT NULL,
-  \`version\`     INT UNSIGNED NOT NULL,
-  \`name\`        VARCHAR(128) NOT NULL,
-  \`checksum\`    CHAR(64)     NOT NULL,
-  \`applied_at\`  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  \`duration_ms\` INT UNSIGNED NOT NULL DEFAULT 0,
-  PRIMARY KEY (\`resource\`,\`version\`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`;
-    var DEADLETTER = `
-CREATE TABLE IF NOT EXISTS \`qbsql_deadletter\` (
-  \`id\`         BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-  \`table_name\` VARCHAR(64)     NOT NULL,
-  \`pk\`         VARCHAR(191)    NOT NULL,
-  \`cols_json\`  LONGTEXT        NOT NULL,
-  \`error\`      VARCHAR(500)             DEFAULT NULL,
-  \`failed_at\`  TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (\`id\`),
-  KEY \`idx_deadletter_table\` (\`table_name\`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`;
-    var _Migrator = class _Migrator {
-      constructor(pools) {
-        this.pools = pools;
-        this._bootstrapped = false;
-      }
-      async _bootstrap() {
-        if (this._bootstrapped) return;
-        await this.pools.write.query(ddl(BOOTSTRAP));
-        await this.pools.write.query(ddl(DEADLETTER));
-        this._bootstrapped = true;
-      }
-      async migrate(resource, migrations) {
-        await this._bootstrap();
-        const [applied] = await this.pools.write.query(
-          "SELECT `version`, `checksum` FROM `qbsql_migrations` WHERE `resource` = ?",
-          [resource]
-        );
-        const appliedByVersion = new Map(applied.map((r) => [r.version, r.checksum]));
-        const sorted = migrations.slice().sort((a, b) => a.version - b.version);
-        let ran = 0;
-        for (const m of sorted) {
-          const prior = appliedByVersion.get(m.version);
-          if (prior !== void 0) {
-            const acceptedLegacy = Array.isArray(m.acceptedChecksums) && m.acceptedChecksums.some((checksum) => typeof checksum === "string" && checksum === prior);
-            if (prior !== m.checksum && !acceptedLegacy) {
-              throw new Error(
-                `qbsql: migration checksum mismatch for '${resource}' v${m.version} (${m.name}). The file changed after it was applied. Refusing to continue -- resolve the drift manually. (db=${prior} file=${m.checksum})`
-              );
-            }
-            continue;
-          }
-          const conn = await this.pools.write.getConnection();
-          const started = process.hrtime.bigint();
-          try {
-            const statements = splitStatements(m.sql).filter((stmt) => stmt.trim());
-            for (const stmt of statements) {
-              const withoutComments = stmt.replace(/^\s*(?:--[^\n]*\n\s*)*/g, "");
-              const safeCreate = /^CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\b/i.test(withoutComments);
-              const allAdds = withoutComments.match(/\bADD\b/gi) || [];
-              const safeAdds = withoutComments.match(/\bADD\s+(?:COLUMN|(?:UNIQUE\s+)?INDEX)\s+IF\s+NOT\s+EXISTS\b/gi) || [];
-              const allDrops = withoutComments.match(/\bDROP\b/gi) || [];
-              const safeDrops = withoutComments.match(/\bDROP\s+INDEX\s+IF\s+EXISTS\b/gi) || [];
-              const safeAlter = /^ALTER\s+TABLE\b/i.test(withoutComments) && allAdds.length > 0 && allAdds.length === safeAdds.length && allDrops.length === safeDrops.length;
-              if (!safeCreate && !safeAlter) {
-                throw new Error("DDL migrations must be retry-safe (CREATE TABLE IF NOT EXISTS or ALTER ADD ... IF NOT EXISTS)");
-              }
-            }
-            for (const stmt of statements) await conn.query(ddl(stmt));
-            const ms = Number(process.hrtime.bigint() - started) / 1e6;
-            await conn.query(
-              "INSERT INTO `qbsql_migrations` (`resource`,`version`,`name`,`checksum`,`duration_ms`) VALUES (?,?,?,?,?)",
-              [resource, m.version, m.name, m.checksum, Math.round(ms)]
-            );
-            ran++;
-            log2.info("migrate", `${resource} v${m.version} '${m.name}' applied (${ms.toFixed(0)}ms)`);
-          } catch (err) {
-            throw new Error(`qbsql: migration '${resource}' v${m.version} (${m.name}) failed: ${err.message}`);
-          } finally {
-            conn.release();
-          }
-        }
-        return { ran, total: sorted.length };
-      }
-    };
-    __name(_Migrator, "Migrator");
-    var Migrator2 = _Migrator;
-    function splitStatements(sql) {
-      const out = [];
-      let buf = "";
-      let inSingle = false, inDouble = false, inBacktick = false, inLineComment = false;
-      for (let i = 0; i < sql.length; i++) {
-        const c = sql[i];
-        const next = sql[i + 1];
-        if (inLineComment) {
-          if (c === "\n") inLineComment = false;
-          buf += c;
-          continue;
-        }
-        if (!inSingle && !inDouble && !inBacktick && c === "-" && next === "-") {
-          inLineComment = true;
-          buf += c;
-          continue;
-        }
-        if (c === "'" && !inDouble && !inBacktick) inSingle = !inSingle;
-        else if (c === '"' && !inSingle && !inBacktick) inDouble = !inDouble;
-        else if (c === "`" && !inSingle && !inDouble) inBacktick = !inBacktick;
-        if (c === ";" && !inSingle && !inDouble && !inBacktick) {
-          out.push(buf);
-          buf = "";
-        } else {
-          buf += c;
-        }
-      }
-      if (buf.trim()) out.push(buf);
-      return out;
-    }
-    __name(splitStatements, "splitStatements");
-    module2.exports = { Migrator: Migrator2, splitStatements };
-  }
-});
-
 // node_modules/mysql2/lib/server.js
 var require_server = __commonJS({
   "node_modules/mysql2/lib/server.js"(exports2, module2) {
@@ -22790,7 +22659,6 @@ var require_exports = __commonJS({
         }
         api2.ready().then(() => api2.queue.flush(table)).then(() => reply("flush", cb, true, null)).catch((e) => reply("flush", cb, false, String(e.message)));
       });
-      dataExport("migrate", (resource, migrations) => api2.migrator.migrate(resource, migrations));
       dataExport("ensureTable", (spec, resource) => api2.schema.ensureTable(spec, resource));
       dataExport("ensureTables", (specs, resource) => api2.schema.ensureTables(specs, resource));
       dataExport("prepareWarm", (sqlList) => api2.prepareWarm(sqlList));
@@ -22875,8 +22743,20 @@ var { createLegacyInventoryBridge } = require_legacy_inventory();
 var { createLegacyHousingBridge } = require_legacy_housing();
 var { WriteQueue } = require_queue();
 var { TransactionRunner } = require_transaction();
-var { Migrator } = require_migrate();
 var { SchemaManager } = require_schema();
+var DEADLETTER_TABLE = {
+  name: "qbsql_deadletter",
+  columns: [
+    { name: "id", type: "bigint", unsigned: true, auto_increment: true },
+    { name: "table_name", type: "varchar(64)" },
+    { name: "pk", type: "varchar(191)" },
+    { name: "cols_json", type: "longtext" },
+    { name: "error", type: "varchar(500)", null: true, default: null },
+    { name: "failed_at", type: "timestamp", default: { raw: "CURRENT_TIMESTAMP" } }
+  ],
+  primary: ["id"],
+  indexes: [{ name: "idx_deadletter_table", columns: ["table_name"] }]
+};
 var { register } = require_exports();
 var { connectWithRetry } = require_startup();
 var log = require_logger();
@@ -22961,9 +22841,8 @@ async function boot() {
   api.executor = new Executor(pools, api.statements, api.stats, legacyInventory, legacyHousing);
   api.queue = new WriteQueue(api.executor, pools, api.stats, cfg);
   api.txn = new TransactionRunner(pools);
-  api.migrator = new Migrator(pools);
   api.schema = new SchemaManager(pools);
-  await api.migrator._bootstrap();
+  await api.schema.ensureTable(DEADLETTER_TABLE, "kora_sql");
   api._ready = true;
   api._readyResolve(true);
   emit("qbsql:internal:ready", api.version());
