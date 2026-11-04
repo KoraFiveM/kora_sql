@@ -21,7 +21,7 @@ const { TransactionRunner } = require('./transaction');
 const { SchemaManager } = require('./schema');
 
 const DEADLETTER_TABLE = {
-    name: 'qbsql_deadletter',
+    name: 'kora_sql_deadletter',
     columns: [
         { name: 'id', type: 'bigint', unsigned: true, auto_increment: true },
         { name: 'table_name', type: 'varchar(64)' },

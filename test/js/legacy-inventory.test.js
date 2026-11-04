@@ -39,7 +39,7 @@ test('matcher accepts only the single supported police-trash delete', () => {
     for (const sql of [
         "DELETE FROM inventories WHERE identifier = 'other'",
         SQL + ' OR 1=1', SQL + '; DELETE FROM players', SQL + ' /* extra */',
-        "DELETE FROM qbinventory_inventories WHERE inventory_id = 'policetrash'",
+        "DELETE FROM kora_inventory_inventories WHERE inventory_id = 'policetrash'",
         "DELETE FROM `inventories WHERE identifier = 'policetrash'",
         "DELETE FROM app.inventories WHERE identifier = 'policetrash'",
     ]) assert.equal(isPoliceTrashDelete(sql, []), false, sql);
@@ -67,7 +67,7 @@ test('standalone SQL and unrelated/native statements execute unchanged', async (
         assert.equal(f.calls[0].sql, SQL);
     }
     const f = fixture();
-    const native = 'DELETE FROM qbinventory_inventories WHERE inventory_type=? AND inventory_id=?';
+    const native = 'DELETE FROM kora_inventory_inventories WHERE inventory_type=? AND inventory_id=?';
     await f.executor.update(native, ['stash', 'policetrash']);
     await f.executor.update("DELETE FROM inventories WHERE identifier='other'", []);
     assert.equal(f.calls.length, 2);

@@ -17,7 +17,7 @@ code works unmodified).
    ```
    set qbsql_read_pool_size 16
    set qbsql_write_pool_size 8
-   set qbsql_statement_cache 256      # cache * (read+write pools) must be <= 8000
+   set kora_sql_statement_cache 256      # cache * (read+write pools) must be <= 8000
    set qbsql_connect_retry_interval 2000 # ms between startup connection retries
    set qbsql_flush_interval 250       # ms between coalescing flushes
    set qbsql_max_pending_rows 500     # high-water mark that forces a flush

@@ -17,7 +17,7 @@ function makeFakePools(opts) {
     const pool = {
         async execute(sql, params) {
             calls++;
-            if (opts.failDeadLetter && /qbsql_deadletter/.test(sql)) {
+            if (opts.failDeadLetter && /kora_sql_deadletter/.test(sql)) {
                 throw new Error('simulated dead-letter failure');
             }
             if (opts.failFirst && calls <= opts.failFirst) {
@@ -181,7 +181,7 @@ test('failed active flush rearms the timer for immediate pending writes', async 
     assert.ok(q.timer, 'failed immediate writes must not strand the pending generation');
     assert.equal(q.pendingRowCount, 1);
     await q.flush('players');
-    assert.deepEqual(executed.filter(({ sql }) => !/qbsql_deadletter/.test(sql)).map(({ params }) => params), [['B', 2]]);
+    assert.deepEqual(executed.filter(({ sql }) => !/kora_sql_deadletter/.test(sql)).map(({ params }) => params), [['B', 2]]);
 });
 
 test('flush waits for every selected table before reporting the first write failure', async (t) => {
@@ -197,7 +197,7 @@ test('flush waits for every selected table before reporting the first write fail
             return [{ affectedRows: 1 }];
         }
         const result = await execute(sql, params);
-        if (/qbsql_deadletter/.test(sql)) deadLettered.resolve();
+        if (/kora_sql_deadletter/.test(sql)) deadLettered.resolve();
         return result;
     };
     const q = new WriteQueue(null, pools, new Stats(150, 50), { ...CFG, flushInterval: 60000 });
@@ -291,7 +291,7 @@ test('queued upserts turn missing values and the public NULL sentinel into SQL N
     const { executed, pools } = makeFakePools();
     const q = new WriteQueue(null, pools, new Stats(150, 50), CFG);
 
-    q.enqueue('qbmultijob_jobs', 'citizenid', {
+    q.enqueue('kora_multijob_jobs', 'citizenid', {
         pk: 'ABC',
         cols: { jobs: undefined, note: '\u0000qbsql:null\u0000' },
     }, {});
@@ -309,7 +309,7 @@ test('a terminal write failure is dead-lettered and rejects the flush', async ()
     await assert.rejects(() => q.flush(), /failed after 5 retries/);
 
     assert.equal(executed.length, 1, 'only the dead-letter insert should succeed');
-    assert.match(executed[0].sql, /qbsql_deadletter/);
+    assert.match(executed[0].sql, /kora_sql_deadletter/);
     assert.equal(stats.summary({}).queue.deadLettered, 1);
     assert.equal(q.depth().players.rows, 0, 'the stale retry hedge must not remain queued after dead-lettering');
 });
@@ -338,13 +338,13 @@ for (const mode of ['assign', 'accumulate']) {
                 ], options);
                 await assert.rejects(q.flush('players'), failDeadLetter ? /failed to dead-letter/ : /failed after 5 retries/);
 
-                const writes = () => executed.filter(({ sql }) => !/qbsql_deadletter/.test(sql));
+                const writes = () => executed.filter(({ sql }) => !/kora_sql_deadletter/.test(sql));
                 assert.deepEqual(writes().map(({ params }) => params[0]), ['GOOD', 'OTHER_SIGNATURE'],
                     'later chunks and column groups must still be written');
                 assert.equal(stats.queue.rowsWritten, 2, 'count only successful writes');
                 assert.equal(stats.queue.statementsIssued, 2);
                 assert.equal(stats.queue.deadLettered, failDeadLetter ? 0 : 1);
-                const recovery = executed.filter(({ sql }) => /qbsql_deadletter/.test(sql));
+                const recovery = executed.filter(({ sql }) => /kora_sql_deadletter/.test(sql));
                 if (!failDeadLetter) {
                     assert.equal(recovery.length, 1);
                     assert.equal(recovery[0].params[1], 'BAD');

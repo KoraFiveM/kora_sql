@@ -97,7 +97,7 @@ function load() {
         connection,
         readPoolSize: getIntConvar('qbsql_read_pool_size', 16),
         writePoolSize: getIntConvar('qbsql_write_pool_size', 8),
-        statementCache: getIntConvar('qbsql_statement_cache', 256),
+        statementCache: getIntConvar('kora_sql_statement_cache', 256),
         flushInterval: getIntConvar('qbsql_flush_interval', 250),
         maxPendingRows: getIntConvar('qbsql_max_pending_rows', 500),
         maxRowsPerStatement: getIntConvar('qbsql_max_rows_per_statement', 200),
@@ -122,10 +122,10 @@ function load() {
     const worstCasePrepared = cfg.statementCache * totalConns;
     if (worstCasePrepared > 8000) {
         throw new Error(
-            `qbsql: qbsql_statement_cache (${cfg.statementCache}) x total connections (${totalConns}) ` +
+            `qbsql: kora_sql_statement_cache (${cfg.statementCache}) x total connections (${totalConns}) ` +
             `= ${worstCasePrepared} prepared statements, over the safe ceiling of 8000 ` +
             `(MySQL max_prepared_stmt_count defaults to 16382, and it is GLOBAL on a shared host). ` +
-            `Lower qbsql_statement_cache or the pool sizes.`
+            `Lower kora_sql_statement_cache or the pool sizes.`
         );
     }
 

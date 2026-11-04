@@ -65,7 +65,7 @@ test('unrelated SQL/data and standalone stock installations remain unchanged', a
     assert.equal(f.calls.length, 1);
     const sql = "SELECT * FROM messages WHERE body='FROM player_houses'";
     assert.equal(touchesStockTables(sql), false);
-    assert.equal(touchesStockTables('SELECT * FROM qbhousing_properties'), false);
+    assert.equal(touchesStockTables('SELECT * FROM kora_housing_properties'), false);
     await fixture().executor.query(sql, [], 'other');
 });
 

@@ -320,7 +320,7 @@ class WriteQueue {
     async _deadLetter(table, chunk, err) {
         // Best-effort persistence of unwriteable rows so they are recoverable.
         const sql =
-            'INSERT INTO `qbsql_deadletter` (`table_name`,`pk`,`cols_json`,`error`,`failed_at`) ' +
+            'INSERT INTO `kora_sql_deadletter` (`table_name`,`pk`,`cols_json`,`error`,`failed_at`) ' +
             'VALUES (?,?,?,?,NOW())';
         const failures = [];
         for (const entry of chunk) {

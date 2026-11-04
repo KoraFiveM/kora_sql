@@ -91,29 +91,29 @@ runBench = function(n)
     end
 
     print(('^5[qbsql] bench^7 preparing scratch table for %d rows...'):format(n))
-    await('execute', [[CREATE TABLE IF NOT EXISTS `qbsql_bench` (
+    await('execute', [[CREATE TABLE IF NOT EXISTS `kora_sql_bench` (
         `id` VARCHAR(32) NOT NULL, `v` INT NOT NULL, PRIMARY KEY(`id`)
     ) ENGINE=InnoDB]], {})
-    await('execute', 'TRUNCATE `qbsql_bench`', {})
+    await('execute', 'TRUNCATE `kora_sql_bench`', {})
 
     -- Path A: N individual upserts, each its own boundary crossing + round trip.
     local statsBefore = exports.kora_sql:stats()
     local a0 = GetGameTimer()
     for i = 1, n do
         await('execute',
-            'INSERT INTO `qbsql_bench` (`id`,`v`) VALUES (?,?) ON DUPLICATE KEY UPDATE `v` = VALUES(`v`)',
+            'INSERT INTO `kora_sql_bench` (`id`,`v`) VALUES (?,?) ON DUPLICATE KEY UPDATE `v` = VALUES(`v`)',
             { ('a%d'):format(i), i })
     end
     local aMs = GetGameTimer() - a0
 
     -- Path B: one enqueueMany of N rows + one flush.
-    await('execute', 'TRUNCATE `qbsql_bench`', {})
+    await('execute', 'TRUNCATE `kora_sql_bench`', {})
     local rows = {}
     for i = 1, n do rows[i] = { pk = ('b%d'):format(i), cols = { v = i } } end
     local b0 = GetGameTimer()
-    exports.kora_sql:enqueueMany('qbsql_bench', 'id', rows, { mode = 'assign' })
+    exports.kora_sql:enqueueMany('kora_sql_bench', 'id', rows, { mode = 'assign' })
     local p = promise.new()
-    exports.kora_sql:flush('qbsql_bench', function(ok) p:resolve(ok) end)
+    exports.kora_sql:flush('kora_sql_bench', function(ok) p:resolve(ok) end)
     pcall(Citizen.Await, p)
     local bMs = GetGameTimer() - b0
 
