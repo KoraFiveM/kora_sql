@@ -48,4 +48,15 @@ harness.test('ensureTable and ensureTables pass the spec and calling resource to
     harness.assertEqual(call.args[3], 'consumer-under-test')
 end)
 
+harness.test('awaitTables passes names, timeout and calling resource to the driver', function()
+    local ok, err = Kora.sql.awaitTables({ 'players' }, 1500)
+    harness.assertTrue(ok ~= nil, tostring(err))
+    local call = net.lastCall('awaitTables')
+    harness.assertEqual(call.args[1][1], 'players')
+    harness.assertEqual(call.args[2], 1500)
+    harness.assertEqual(call.args[3], 'consumer-under-test')
+    Kora.sql.awaitTables({ 'players' })
+    harness.assertEqual(net.lastCall('awaitTables').args[2], 60000)
+end)
+
 harness.report('init')

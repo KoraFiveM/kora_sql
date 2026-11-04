@@ -170,6 +170,9 @@ The report also carries `modified_columns` and `added_checks`.
 
 There is no migration runner: the handler only creates missing tables and adds missing columns, indexes, foreign keys and checks. Anything that must convert, backfill or drop existing data has to be done by hand.
 
+### Kora.sql.awaitTables(names, timeoutMs?) -> true, errString
+Yields until every named table exists. Use it before the first query against a table another resource creates (for example `players`, `player_vehicles`), because on a blank database those tables appear a few seconds after start. Default timeout 60 s.
+
 ### Callback variants
 `Kora.sql.queryAsync(sql, params, cb)` and friends — `cb(result, errString)`, no
 coroutine required. `ensureTableAsync(spec, cb)` and `ensureTablesAsync(specs, cb)` too.

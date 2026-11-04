@@ -246,6 +246,7 @@ function register(api, exports) {
 
     dataExport('ensureTable', (spec, resource) => api.schema.ensureTable(spec, resource));
     dataExport('ensureTables', (specs, resource) => api.schema.ensureTables(specs, resource));
+    dataExport('awaitTables', (names, timeoutMs, resource) => api.schema.awaitTables(names, timeoutMs, resource));
     dataExport('prepareWarm', (sqlList) => api.prepareWarm(sqlList));
 
     exports('stats', (cb) => { const s = api.stats.summary(api.statements.summary()); if (cb) cb(s); return s; });

@@ -22477,6 +22477,25 @@ var require_schema = __commonJS({
           return report;
         });
       }
+      // Resolves once every named table exists, so a resource can wait for tables another resource creates.
+      async awaitTables(names, timeoutMs, resource) {
+        if (!Array.isArray(names) || names.length === 0 || names.some((n) => typeof n !== "string" || !IDENT.test(n))) {
+          throw new Error("qbsql schema: awaitTables expects a list of table names");
+        }
+        const deadline = Date.now() + (Number(timeoutMs) > 0 ? Number(timeoutMs) : 6e4);
+        const unique = [...new Set(names)];
+        for (; ; ) {
+          const [rows] = await this.pools.write.query(
+            "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN (?)",
+            [unique]
+          );
+          const have = new Set(rows.map((r) => r.TABLE_NAME.toLowerCase()));
+          const missing = unique.filter((n) => !have.has(n.toLowerCase()));
+          if (missing.length === 0) return true;
+          if (Date.now() >= deadline) throw new Error(`tables not created within the timeout: ${missing.join(", ")} (waiting: ${resource || "unknown"})`);
+          await new Promise((resolve) => setTimeout(resolve, 250));
+        }
+      }
       // Runs in order so foreign key parents can be listed first. Stops at the first failure.
       async ensureTables(specs, resource) {
         if (!Array.isArray(specs)) throw new Error("qbsql schema: ensureTables expects a list of table specs");
@@ -22661,6 +22680,7 @@ var require_exports = __commonJS({
       });
       dataExport("ensureTable", (spec, resource) => api2.schema.ensureTable(spec, resource));
       dataExport("ensureTables", (specs, resource) => api2.schema.ensureTables(specs, resource));
+      dataExport("awaitTables", (names, timeoutMs, resource) => api2.schema.awaitTables(names, timeoutMs, resource));
       dataExport("prepareWarm", (sqlList) => api2.prepareWarm(sqlList));
       exports3("stats", (cb) => {
         const s = api2.stats.summary(api2.statements.summary());

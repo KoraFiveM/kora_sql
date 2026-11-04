@@ -245,3 +245,14 @@ test('seed.once only seeds the run that creates the table', async () => {
     spec.seed.once = false;
     assert.equal((await new SchemaManager(fakePools({ exists: true, actual: present.pools.write && { columns: [{ COLUMN_NAME: 'id', COLUMN_TYPE: 'int(11)', IS_NULLABLE: 'NO' }], indexes: [], foreign: [], checks: [] } }).pools).ensureTable(spec, 'demo')).seeded, 2);
 });
+
+test('awaitTables resolves when the tables appear and times out naming the missing ones', async () => {
+    let calls = 0;
+    const pools = { write: { query: async (sql, values) => { calls++; return [calls < 3 ? [{ TABLE_NAME: 'a' }] : [{ TABLE_NAME: 'a' }, { TABLE_NAME: 'B' }], []]; } } };
+    assert.equal(await new SchemaManager(pools).awaitTables(['a', 'b', 'a'], 5000, 'demo'), true);
+    assert.ok(calls >= 3);
+    const never = { write: { query: async () => [[], []] } };
+    await assert.rejects(new SchemaManager(never).awaitTables(['x', 'y'], 300, 'demo'), /x, y.*demo/);
+    await assert.rejects(new SchemaManager(never).awaitTables(['bad name'], 300, 'demo'), /list of table names/);
+    await assert.rejects(new SchemaManager(never).awaitTables([], 300, 'demo'), /list of table names/);
+});

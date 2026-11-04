@@ -99,6 +99,9 @@ function Kora.sql.upsert(table_, key, rows, opts) return await('upsert', table_,
 ---@return string? error
 function Kora.sql.ensureTable(spec)  return await('ensureTable', spec, GetCurrentResourceName()) end
 
+---Yields until every named table exists (created by this or another resource). Returns true, or nil + error after `timeoutMs` (default 60000).
+function Kora.sql.awaitTables(names, timeoutMs) return await('awaitTables', names, timeoutMs or 60000, GetCurrentResourceName()) end
+
 ---Same as `ensureTable` for an ordered list, so foreign key parents can come first.
 function Kora.sql.ensureTables(specs) return await('ensureTables', specs, GetCurrentResourceName()) end
 

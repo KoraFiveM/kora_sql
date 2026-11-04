@@ -109,3 +109,22 @@ test('generated columns, checks, modify and extend converge on a real database',
         await pool.end();
     }
 });
+
+test('awaitTables waits for a table another caller creates a moment later', {
+    skip: !disposable,
+}, async () => {
+    const pool = mysql.createPool({ uri: dsn, namedPlaceholders: true });
+    const manager = new SchemaManager({ write: pool });
+    try {
+        await pool.query('DROP TABLE IF EXISTS `qbsql_t_late`');
+        const started = Date.now();
+        const waiting = manager.awaitTables(['qbsql_t_late'], 5000, 'consumer');
+        setTimeout(() => manager.ensureTable({ name: 'qbsql_t_late', columns: [{ name: 'id', type: 'int' }] }, 'owner'), 700);
+        assert.equal(await waiting, true);
+        assert.ok(Date.now() - started >= 600, 'resolved only after the table existed');
+        await assert.rejects(manager.awaitTables(['qbsql_t_never'], 400, 'consumer'), /qbsql_t_never/);
+    } finally {
+        await pool.query('DROP TABLE IF EXISTS `qbsql_t_late`');
+        await pool.end();
+    }
+});
