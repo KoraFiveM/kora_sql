@@ -126,7 +126,11 @@ local function guarded(fn)
             print(('^1[qbsql:oxmysql-bridge]^7 multi-statement query refused from \'%s\' -- split it, or set '
                 .. '`qbsql_allow_multiple_statements true` and accept the injection amplification. SQL: %s')
                 :format(resource, tostring(query):sub(1, 120)))
-            if type(cb) == 'function' then cb(nil, 'multi-statement refused') end
+            -- Another resource's callback arrives as a function-reference table, and
+            -- (query, cb) puts it in the params slot; answer it either way so the
+            -- caller (e.g. a MySQL.query.await promise) does not wait forever.
+            if cb == nil and isCallable(params) then cb = params end
+            if isCallable(cb) then cb(nil, 'multi-statement refused') end
             return nil
         end
         return fn(query, params, cb)

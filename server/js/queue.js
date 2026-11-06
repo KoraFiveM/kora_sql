@@ -70,7 +70,14 @@ class WriteQueue {
             };
             this.pending.set(table, st);
         } else if (st.mode !== mode || st.writeMode !== writeMode || JSON.stringify(st.conflictKey) !== JSON.stringify(conflictKey)) {
-            throw new Error(`qbsql/queue: incompatible queue options for table ${table} while writes are pending.`);
+            // The options are only locked while rows are pending or a write is in
+            // flight; an idle table takes the new caller's options.
+            if (st.rows.size > 0 || st.inFlight) {
+                throw new Error(`qbsql/queue: incompatible queue options for table ${table} while writes are pending.`);
+            }
+            st.conflictKey = conflictKey;
+            st.mode = mode;
+            st.writeMode = writeMode;
         }
         return st;
     }
@@ -200,10 +207,15 @@ class WriteQueue {
                 g.rows.push(entry);
             }
 
+            const keyCount = Array.isArray(st.conflictKey) ? st.conflictKey.length : 1;
             for (const g of groups.values()) {
+                // The batched UPDATE binds every key once per column CASE branch plus once in WHERE.
+                const perRow = st.writeMode === 'update'
+                    ? g.columns.length * (keyCount + 1) + keyCount
+                    : g.columns.length + keyCount;
                 const perStatement = Math.min(
                     this.cfg.maxRowsPerStatement,
-                    Math.max(1, Math.floor(this.cfg.maxPlaceholders / (g.columns.length + 1)))
+                    Math.max(1, Math.floor(this.cfg.maxPlaceholders / perRow))
                 );
                 for (let i = 0; i < g.rows.length; i += perStatement) {
                     const chunk = g.rows.slice(i, i + perStatement);
@@ -213,7 +225,8 @@ class WriteQueue {
                         {
                             mode: st.mode,
                             dialect: this.dialect,
-                            pad: this.cfg.padToBuckets && st.mode === 'assign',
+                            // Padding must not push a wide chunk past the placeholder budget.
+                            pad: this.cfg.padToBuckets && st.mode === 'assign' && batch.bucketFor(chunk.length) <= perStatement,
                         }
                     );
                     try {

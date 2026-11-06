@@ -10,8 +10,19 @@ local function provideExport(providedResource, exportName, func)
     end)
 end
 
+local function isCallable(value)
+    if type(value) == 'function' then return true end
+    if type(value) ~= 'table' then return false end
+    if rawget(value, '__cfx_functionReference') then return true end
+    local mt = getmetatable(value)
+    return mt ~= nil and mt.__call ~= nil
+end
+
 local function asyncCall(jsName)
     return function(query, params, cb)
+        -- (query, cb) is a common legacy call shape; shift it so the callback is
+        -- not sent as the bind list (which also drops resource attribution).
+        if cb == nil and isCallable(params) then cb, params = params, nil end
         local resource = GetInvokingResource() or GetCurrentResourceName()
         exports.kora_sql[jsName](exports.kora_sql, query, params or {}, cb, resource)
     end
@@ -38,6 +49,7 @@ local registrations = {
 }
 
 registrations.transaction = function(queries, params, cb)
+    if cb == nil and isCallable(params) then cb, params = params, nil end
     local resource = GetInvokingResource() or GetCurrentResourceName()
     exports.kora_sql:transaction(queries, params, cb, resource)
 end

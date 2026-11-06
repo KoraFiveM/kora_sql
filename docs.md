@@ -17,7 +17,8 @@ code works unmodified).
    ```
    set qbsql_read_pool_size 16
    set qbsql_write_pool_size 8
-   set kora_sql_statement_cache 256      # cache * (read+write pools) must be <= 8000
+   set kora_sql_statement_cache 256      # cache * (read+write pools) must be <= 8000 (old name qbsql_statement_cache still read)
+   set kora_sql_default_collate utf8mb4_unicode_ci # collation for tables ensureTable creates without one; "" = server default
    set qbsql_connect_retry_interval 2000 # ms between startup connection retries
    set qbsql_flush_interval 250       # ms between coalescing flushes
    set qbsql_max_pending_rows 500     # high-water mark that forces a flush
@@ -134,7 +135,7 @@ parents first, and stops at the first error.
 Kora.sql.ensureTables({
     {
         name = 'my_orders',
-        collate = 'utf8mb4_unicode_ci',            -- optional; engine/charset default to InnoDB/utf8mb4
+        collate = 'utf8mb4_unicode_ci',            -- optional; engine/charset default to InnoDB/utf8mb4, a new table's collation to kora_sql_default_collate
         columns = {
             { name = 'id',        type = 'bigint', unsigned = true, auto_increment = true },
             { name = 'citizenid', type = 'varchar(50)', null = true, default = Kora.sql.NULL },

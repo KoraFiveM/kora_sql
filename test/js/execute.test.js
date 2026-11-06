@@ -74,3 +74,12 @@ test('mysql-async @name placeholders normalize without touching literals/comment
     assert.equal(result.params.tag, 'x');
     assert.equal(result.params.email, 'a@example.com');
 });
+
+test('oxmysql prepare returns every row of a multi-row SELECT, not only the first', async () => {
+    const rows = [{ citizenid: 'CID1' }, { citizenid: 'CID2' }, { citizenid: 'CID3' }];
+    const { executor } = harness([rows]);
+    assert.deepEqual(await executor.prepare('SELECT citizenid FROM players WHERE job = ?', ['police']), rows);
+
+    const empty = harness([[]]);
+    assert.equal(await empty.executor.prepare('SELECT citizenid FROM players WHERE job = ?', ['none']), null);
+});

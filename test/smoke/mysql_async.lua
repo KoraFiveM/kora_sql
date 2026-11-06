@@ -51,6 +51,24 @@ h.test('raw mysql-async exports forward to kora_sql with attribution', function(
     h.assertTrue(handle.getExport('mysql-async', 'is_ready')(), 'is_ready')
 end)
 
+h.test('raw (query, cb) calls shift the callback out of the params slot', function()
+    handle.setInvokingResource('legacy')
+    local cb = function() end
+    handle.getExport('mysql-async', 'mysql_fetch_all')('SELECT 1', cb)
+    local call = handle.lastCallExact('query')
+    h.assertEqual(type(call.args[2]), 'table', 'params normalised to a table')
+    h.assertEqual(call.args[3], cb, 'callback in the callback slot')
+    h.assertEqual(call.args[4], 'legacy')
+
+    _G.Config.compat.ghmattimysql = true
+    dofile('server/compat/ghmattimysql.lua')
+    handle.getExport('ghmattimysql', 'execute')('SELECT 2', cb)
+    call = handle.lastCallExact('query')
+    h.assertEqual(call.args[1], 'SELECT 2')
+    h.assertEqual(call.args[3], cb)
+    h.assertEqual(call.args[4], 'legacy')
+end)
+
 -- Consumer VM: load the stub include the way FXServer resolves @mysql-async/...
 GetNumResourceMetadata = function() return 0 end
 GetResourceMetadata = function() return nil end

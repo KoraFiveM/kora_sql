@@ -249,9 +249,10 @@ function register(api, exports) {
     dataExport('awaitTables', (names, timeoutMs, resource) => api.schema.awaitTables(names, timeoutMs, resource));
     dataExport('prepareWarm', (sqlList) => api.prepareWarm(sqlList));
 
-    exports('stats', (cb) => { const s = api.stats.summary(api.statements.summary()); if (cb) cb(s); return s; });
-    exports('slowQueries', (limit, cb) => { const s = api.stats.slowQueries(limit); if (cb) cb(s); return s; });
-    exports('resetStats', () => api.stats.reset());
+    // The stats objects exist only once boot() has loaded its config.
+    exports('stats', (cb) => { const s = api.stats && api.statements ? api.stats.summary(api.statements.summary()) : null; if (cb) cb(s); return s; });
+    exports('slowQueries', (limit, cb) => { const s = api.stats ? api.stats.slowQueries(limit) : []; if (cb) cb(s); return s; });
+    exports('resetStats', () => { if (api.stats) api.stats.reset(); });
 }
 
 module.exports = { register };

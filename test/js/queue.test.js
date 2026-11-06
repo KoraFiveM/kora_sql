@@ -365,3 +365,27 @@ for (const mode of ['assign', 'accumulate']) {
         }
     }
 }
+
+test('an idle table accepts new queue options; a table with pending rows still refuses them', async () => {
+    const { executed, pools } = makeFakePools();
+    const q = new WriteQueue(null, pools, new Stats(150, 50), CFG);
+    q.enqueue('counters', 'id', { pk: 'a', cols: { n: 1 } }, { mode: 'assign' });
+    assert.throws(() => q.enqueue('counters', 'id', { pk: 'a', cols: { n: 1 } }, { mode: 'accumulate' }), /incompatible queue options/);
+    await q.flush();
+    q.enqueue('counters', 'id', { pk: 'a', cols: { n: 2 } }, { mode: 'accumulate' });
+    await q.flush();
+    assert.equal(executed.length, 2);
+    assert.match(executed[1].sql, /`n` = `n` \+ VALUES\(`n`\)/);
+});
+
+test('batched UPDATE chunks stay inside the placeholder budget for wide rows', async () => {
+    const { executed, pools } = makeFakePools();
+    const q = new WriteQueue(null, pools, new Stats(150, 50), { ...CFG, maxPlaceholders: 100, padToBuckets: true });
+    const cols = { a: 1, b: 2, c: 3, d: 4 };
+    const rows = Array.from({ length: 30 }, (_, i) => ({ pk: `p${i}`, cols }));
+    q.enqueueMany('players', 'citizenid', rows, { mode: 'assign', writeMode: 'update' });
+    await q.flush();
+    // 4 columns x (1 key + 1 value) + 1 WHERE key = 9 placeholders a row -> 11 rows a statement.
+    assert.ok(executed.length >= 3);
+    for (const e of executed) assert.ok(e.params.length <= 100, `${e.params.length} placeholders`);
+});

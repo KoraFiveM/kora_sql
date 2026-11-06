@@ -49,7 +49,10 @@ local function await(name, ...)
             p:resolve(result)
         end
     end
-    driver[name](driver, table.unpack(args))
+    -- A stopped or restarting kora_sql makes the export call itself raise; keep
+    -- the (nil, err) contract instead of throwing into the caller.
+    local called, callErr = pcall(function() driver[name](driver, table.unpack(args)) end)
+    if not called then return nil, tostring(callErr) end
     local ok, res = pcall(Citizen.Await, p)
     if not ok then
         return nil, tostring(res)
@@ -60,11 +63,17 @@ end
 -- The yielding API. Each returns (value, errorString); on error the value is
 -- nil and the second return carries the message, per this codebase's
 -- fallible-function convention (never throws across the call).
+-- isReady raises while kora_sql is stopped or still loading its exports; treat that as not ready.
+local function driverReady()
+    local ok, ready = pcall(function() return exports.kora_sql:isReady() end)
+    return ok and ready == true
+end
+
 function Kora.sql.ready(timeoutMs)
     -- isReady is cheap and synchronous; poll it so a caller can gate on the pool.
-    if exports.kora_sql:isReady() then return true end
+    if driverReady() then return true end
     local deadline = GetGameTimer() + (timeoutMs or (Config and Config.sql and Config.sql.readyTimeout) or 60000)
-    while not exports.kora_sql:isReady() do
+    while not driverReady() do
         if GetGameTimer() > deadline then return false, 'qbsql not ready within timeout' end
         Wait(50)
     end
@@ -115,9 +124,12 @@ function Kora.sql.enqueueMany(table_, key, rows, opts) exports.kora_sql:enqueueM
 -- flush yields until the named table (or everything) has been drained.
 function Kora.sql.flush(table_)
     local p = promise.new()
-    exports.kora_sql:flush(table_, function(ok, err)
-        if ok then p:resolve(true) else p:reject(err or 'flush failed') end
+    local called, callErr = pcall(function()
+        exports.kora_sql:flush(table_, function(ok, err)
+            if ok then p:resolve(true) else p:reject(err or 'flush failed') end
+        end)
     end)
+    if not called then return false, tostring(callErr) end
     local ok, res = pcall(Citizen.Await, p)
     if not ok then return false, tostring(res) end
     return res
@@ -125,9 +137,17 @@ end
 
 -- Non-yielding callback variants for callers that don't want to spin up a
 -- coroutine. cb(result, errorString).
+-- If the driver export itself is unavailable, answer the callback instead of
+-- raising and leaving it unanswered.
+local function invoke(cb, name, ...)
+    local args = table.pack(...)
+    local ok, err = pcall(function() exports.kora_sql[name](exports.kora_sql, table.unpack(args, 1, args.n)) end)
+    if not ok and cb then cb(nil, tostring(err)) end
+end
+
 local function asyncVariant(name)
     return function(sql, params, cb)
-        exports.kora_sql[name](exports.kora_sql, sql, params, cb)
+        invoke(cb, name, sql, params, cb)
     end
 end
 
@@ -139,9 +159,9 @@ Kora.sql.insertAsync  = asyncVariant('insert')
 Kora.sql.updateAsync  = asyncVariant('update')
 
 function Kora.sql.ensureTableAsync(spec, cb)
-    exports.kora_sql:ensureTable(spec, cb, GetCurrentResourceName())
+    invoke(cb, 'ensureTable', spec, cb, GetCurrentResourceName())
 end
 
 function Kora.sql.ensureTablesAsync(specs, cb)
-    exports.kora_sql:ensureTables(specs, cb, GetCurrentResourceName())
+    invoke(cb, 'ensureTables', specs, cb, GetCurrentResourceName())
 end

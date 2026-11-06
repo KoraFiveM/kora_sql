@@ -49,6 +49,7 @@ function validateSpec(input, defaults = {}) {
         engine: input.engine || defaults.engine || 'InnoDB',
         charset: input.charset || defaults.charset || 'utf8mb4',
         collate: input.collate || defaults.collate || null,
+        createCollate: null,
         columns: [],
         primary: input.primary || null,
         indexes: input.indexes || [],
@@ -61,6 +62,15 @@ function validateSpec(input, defaults = {}) {
     assertIdent(spec.engine, 'engine');
     assertIdent(spec.charset, 'charset');
     if (spec.collate !== null && !COLLATION.test(spec.collate)) throw new Error(`qbsql schema: invalid collation '${spec.collate}'`);
+    // A table created with no collate gets the server's charset default (utf8mb4_0900_ai_ci
+    // on MySQL 8), which then fails joins against Kora's utf8mb4_unicode_ci tables with
+    // "Illegal mix of collations". Only CREATE TABLE uses this; existing tables are
+    // never compared against it.
+    const createCollate = typeof defaults.createCollate === 'string' ? defaults.createCollate : '';
+    if (spec.collate === null && COLLATION.test(createCollate)
+        && createCollate.toLowerCase().startsWith(spec.charset.toLowerCase() + '_')) {
+        spec.createCollate = createCollate;
+    }
 
     const seen = new Set();
     for (const col of input.columns) {
@@ -192,7 +202,7 @@ function buildCreate(spec) {
     spec.foreign.forEach((fk) => lines.push(foreignDefinition(fk)));
     spec.checks.forEach((check) => lines.push(checkDefinition(check)));
     let sql = `CREATE TABLE IF NOT EXISTS ${q(spec.name)} (\n  ${lines.join(',\n  ')}\n) ENGINE=${spec.engine} DEFAULT CHARSET=${spec.charset}`;
-    if (spec.collate) sql += ` COLLATE=${spec.collate}`;
+    if (spec.collate || spec.createCollate) sql += ` COLLATE=${spec.collate || spec.createCollate}`;
     if (spec.comment) sql += ` COMMENT=${escape(spec.comment)}`;
     return sql;
 }

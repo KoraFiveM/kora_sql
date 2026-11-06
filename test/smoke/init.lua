@@ -59,4 +59,28 @@ harness.test('awaitTables passes names, timeout and calling resource to the driv
     harness.assertEqual(net.lastCall('awaitTables').args[2], 60000)
 end)
 
+harness.test('a stopped driver returns nil, err (and not ready) instead of raising', function()
+    local real = getmetatable(exports.kora_sql)
+    setmetatable(exports.kora_sql, { __index = function(_, name)
+        return function() error('No such export ' .. name .. ' in resource kora_sql') end
+    end })
+    local ok, raised = pcall(function()
+        local rows, err = Kora.sql.query('SELECT 1')
+        harness.assertEqual(rows, nil)
+        harness.assertTrue(tostring(err):find('No such export', 1, true) ~= nil, tostring(err))
+        local ready, readyErr = Kora.sql.ready(100)
+        harness.assertFalse(ready)
+        harness.assertTrue(readyErr ~= nil)
+        local flushed, flushErr = Kora.sql.flush('players')
+        harness.assertFalse(flushed)
+        harness.assertTrue(flushErr ~= nil)
+        local got, gotErr = 'unset', nil
+        Kora.sql.queryAsync('SELECT 1', {}, function(r, e) got, gotErr = r, e end)
+        harness.assertEqual(got, nil)
+        harness.assertTrue(gotErr ~= nil, 'async callback answered with the error')
+    end)
+    setmetatable(exports.kora_sql, real)
+    if not ok then error(raised, 0) end
+end)
+
 harness.report('init')

@@ -233,3 +233,16 @@ for (const explicitFalse of [false, true]) {
         assert.equal(calls.length, 3, 'finished transactions must clear their deadline');
     });
 }
+
+test('transaction discards a connection whose rollback failed instead of returning it to the pool', async () => {
+    const { runner, calls, connection } = harness(true);
+    connection.rollback = async () => { calls.push(['rollback']); throw new Error('rollback failed'); };
+    const previous = globalThis.TriggerEvent;
+    globalThis.TriggerEvent = () => {};
+    try {
+        assert.equal(await runner.transaction(['DELETE FROM a'], [], 'consumer'), false);
+        assert.deepEqual(calls.map((call) => call[0]), ['begin', 'query', 'rollback', 'destroy']);
+    } finally {
+        globalThis.TriggerEvent = previous;
+    }
+});

@@ -31,6 +31,11 @@ function getIntConvar(name, def) {
     return Number.isFinite(n) ? n : def;
 }
 
+// A renamed convar keeps honouring its old qbsql_* spelling so an existing server.cfg still applies.
+function getRenamedIntConvar(name, oldName, def) {
+    return getIntConvar(name, getIntConvar(oldName, def));
+}
+
 function getBoolConvar(name, def) {
     const raw = getConvar(name, null);
     if (raw === null) return def;
@@ -97,7 +102,7 @@ function load() {
         connection,
         readPoolSize: getIntConvar('qbsql_read_pool_size', 16),
         writePoolSize: getIntConvar('qbsql_write_pool_size', 8),
-        statementCache: getIntConvar('kora_sql_statement_cache', 256),
+        statementCache: getRenamedIntConvar('kora_sql_statement_cache', 'qbsql_statement_cache', 256),
         flushInterval: getIntConvar('qbsql_flush_interval', 250),
         maxPendingRows: getIntConvar('qbsql_max_pending_rows', 500),
         maxRowsPerStatement: getIntConvar('qbsql_max_rows_per_statement', 200),
@@ -109,6 +114,9 @@ function load() {
         connectRetryInterval: Math.max(250, getIntConvar('qbsql_connect_retry_interval', 2000)),
         // oxmysql-style typeCast on the oxmysql compat exports only (default on, like oxmysql).
         oxTypeCast: getBoolConvar('kora_sql_ox_typecast', true),
+        // Collation for tables ensureTable CREATES without an explicit collate
+        // (existing tables are never altered). Empty = the server's charset default.
+        defaultCollate: getConvar('kora_sql_default_collate', 'utf8mb4_unicode_ci'),
         debug: getBoolConvar('qbsql_debug', false),
     };
 
@@ -132,4 +140,13 @@ function load() {
     return cfg;
 }
 
-module.exports = { load, parseConnectionString };
+// The pool's connection collation. `charset=utf8mb4` (oxmysql's documented form)
+// selects utf8mb4_unicode_ci; a full collation such as `charset=utf8mb4_general_ci`
+// is used as given instead of becoming the unknown 'utf8mb4_general_ci_unicode_ci',
+// which mysql2 rejects and which left the driver unable to start.
+function connectionCollation(charset) {
+    const value = String(charset || 'utf8mb4');
+    return value.includes('_') ? value : `${value}_unicode_ci`;
+}
+
+module.exports = { load, parseConnectionString, connectionCollation };

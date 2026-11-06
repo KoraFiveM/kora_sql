@@ -11,6 +11,7 @@
 
 const mysql = require('mysql2/promise');
 const log = require('./logger');
+const { connectionCollation } = require('./config');
 
 // mysql2 pool options that are NOT optional for correctness in a money-handling
 // framework. Each is commented with the specific breakage it prevents.
@@ -21,7 +22,7 @@ function poolOptions(cfg, connectionLimit) {
         user: cfg.connection.user,
         password: cfg.connection.password,
         database: cfg.connection.database,
-        charset: `${cfg.connection.charset}_unicode_ci`,
+        charset: connectionCollation(cfg.connection.charset),
 
         connectionLimit,
         waitForConnections: true,

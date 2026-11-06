@@ -9,6 +9,14 @@ local runBench
 
 local function fmt(n) return ('%.2f'):format(n or 0) end
 
+-- The stats export throws until the JS side has loaded its config (e.g. no
+-- connection string), so report that instead of a Lua error.
+local function readStats()
+    local ok, s = pcall(function() return exports.kora_sql:stats() end)
+    if ok and type(s) == 'table' and s.queries and s.queue then return s end
+    print('^1[qbsql]^7 stats unavailable: the driver has not started')
+end
+
 RegisterCommand('qbsql', function(source, args)
     if source ~= 0 and not IsPlayerAceAllowed(source, 'command.qbsql') then
         return
@@ -34,7 +42,8 @@ RegisterCommand('qbsql', function(source, args)
         end)
 
     elseif sub == 'stats' then
-        local s = exports.kora_sql:stats()
+        local s = readStats()
+        if not s then return end
         print('^5[qbsql] stats^7')
         print(('  queries: %d total, %d errors, avg %sms, %d fingerprints')
             :format(s.queries.total, s.queries.errors, fmt(s.queries.avgMs), s.queries.distinctFingerprints))
@@ -56,7 +65,8 @@ RegisterCommand('qbsql', function(source, args)
 
     elseif sub == 'queue' then
         -- Depth is JS-side; expose via a tiny query on stats plus a direct call.
-        local s = exports.kora_sql:stats()
+        local s = readStats()
+        if not s then return end
         print('^5[qbsql] queue^7')
         print(('  crossings=%d rowsIn=%d rowsWritten=%d retries=%d deadLettered=%d')
             :format(s.queue.boundaryCrossings, s.queue.rowsEnqueued, s.queue.rowsWritten, s.queue.retries, s.queue.deadLettered))

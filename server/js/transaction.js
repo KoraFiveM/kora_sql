@@ -153,6 +153,7 @@ class TransactionRunner {
     async transaction(queries, maybeParams, resource) {
         const statements = this._normalise(queries, maybeParams);
         const conn = await this.pools.write.getConnection();
+        let discard = false;
         try {
             await conn.beginTransaction();
             for (const st of statements) {
@@ -161,7 +162,9 @@ class TransactionRunner {
             await conn.commit();
             return true;
         } catch (err) {
-            try { await conn.rollback(); } catch (_) { /* connection may be dead */ }
+            // A connection whose ROLLBACK failed may still hold the open
+            // transaction; never hand it back to the pool.
+            try { await conn.rollback(); } catch (_) { discard = true; }
             console.error(`qbsql transaction rolled back: ${err.message}`);
             if (typeof globalThis.TriggerEvent === 'function') {
                 globalThis.TriggerEvent('oxmysql:transaction-error', {
@@ -174,7 +177,8 @@ class TransactionRunner {
             }
             return false;
         } finally {
-            conn.release();
+            if (discard && typeof conn.destroy === 'function') conn.destroy();
+            else conn.release();
         }
     }
 

@@ -103,24 +103,42 @@ async function boot() {
             );
         },
     });
+    if (stopping) {
+        // kora_sql was stopped while the first connection was opening.
+        await Promise.allSettled([pools.read.end(), pools.write.end()]);
+        const stopped = new Error('qbsql stopped while waiting for the database');
+        stopped.code = 'QBSQL_STOPPING';
+        throw stopped;
+    }
     api.pools = pools;
+    // Call the providers under their real resource names: a `provide` alias
+    // (qbinventory) does not register __cfx_export_ handlers, so
+    // exports.qbinventory.* fails with "No such export".
     const legacyInventory = createLegacyInventoryBridge({
         getState: () => GetResourceState('kora_inventory'),
-        request: (callback) => registerExport.qbinventory.deleteLegacyPoliceTrash(callback),
+        request: (callback) => registerExport.kora_inventory.deleteLegacyPoliceTrash(callback),
         onStop: (callback) => on('onResourceStop', callback),
     });
     const legacyHousing = createLegacyHousingBridge({
         getState: () => GetResourceState('kora_housing'),
-        request: (operation, args, callback) => registerExport.qbhousing.readLegacyHousing(operation, args, callback),
+        request: (operation, args, callback) => registerExport.kora_housing.readLegacyHousing(operation, args, callback),
         onStop: (callback) => on('onResourceStop', callback),
     });
     api.executor = new Executor(pools, api.statements, api.stats, legacyInventory, legacyHousing);
     api.queue = new WriteQueue(api.executor, pools, api.stats, cfg);
     api.txn = new TransactionRunner(pools);
-    api.schema = new SchemaManager(pools);
+    api.schema = new SchemaManager(pools, { createCollate: cfg.defaultCollate });
 
-    // The dead-letter table must exist before any write can dead-letter.
-    await api.schema.ensureTable(DEADLETTER_TABLE, 'kora_sql');
+    // The dead-letter table must exist before any write can dead-letter. Retry a
+    // transient connection error here like the first connect, rather than
+    // leaving the driver permanently unready.
+    await connectWithRetry(() => api.schema.ensureTable(DEADLETTER_TABLE, 'kora_sql'), cfg, {
+        retryInterval: cfg.connectRetryInterval,
+        shouldStop: () => stopping,
+        onRetry: (err, attempt, retryInterval) => {
+            log.warn('index', `dead-letter table setup failed (${err.code || err.message}); retry ${attempt} in ${retryInterval}ms`);
+        },
+    });
 
     api._ready = true;
     api._readyResolve(true);
@@ -160,7 +178,11 @@ boot().catch((err) => {
 on('onResourceStop', (resourceName) => {
     if (resourceName !== GetCurrentResourceName()) return;
     stopping = true;
-    if (api.queue) {
-        api.queue.flush().catch((e) => log.error('index', `stop-flush failed: ${e.message}`));
-    }
+    const pools = api.pools;
+    const drained = api.queue
+        ? api.queue.flush().catch((e) => log.error('index', `stop-flush failed: ${e.message}`))
+        : Promise.resolve();
+    // Close both pools after the final drain so a restart does not leave this
+    // instance's connections open on the MySQL server.
+    if (pools) drained.finally(() => Promise.allSettled([pools.read.end(), pools.write.end()]));
 });

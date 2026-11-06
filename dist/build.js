@@ -50,6 +50,10 @@ var require_config = __commonJS({
       return Number.isFinite(n) ? n : def;
     }
     __name(getIntConvar, "getIntConvar");
+    function getRenamedIntConvar(name, oldName, def) {
+      return getIntConvar(name, getIntConvar(oldName, def));
+    }
+    __name(getRenamedIntConvar, "getRenamedIntConvar");
     function getBoolConvar(name, def) {
       const raw = getConvar(name, null);
       if (raw === null) return def;
@@ -105,7 +109,7 @@ var require_config = __commonJS({
         connection,
         readPoolSize: getIntConvar("qbsql_read_pool_size", 16),
         writePoolSize: getIntConvar("qbsql_write_pool_size", 8),
-        statementCache: getIntConvar("kora_sql_statement_cache", 256),
+        statementCache: getRenamedIntConvar("kora_sql_statement_cache", "qbsql_statement_cache", 256),
         flushInterval: getIntConvar("qbsql_flush_interval", 250),
         maxPendingRows: getIntConvar("qbsql_max_pending_rows", 500),
         maxRowsPerStatement: getIntConvar("qbsql_max_rows_per_statement", 200),
@@ -117,6 +121,9 @@ var require_config = __commonJS({
         connectRetryInterval: Math.max(250, getIntConvar("qbsql_connect_retry_interval", 2e3)),
         // oxmysql-style typeCast on the oxmysql compat exports only (default on, like oxmysql).
         oxTypeCast: getBoolConvar("kora_sql_ox_typecast", true),
+        // Collation for tables ensureTable CREATES without an explicit collate
+        // (existing tables are never altered). Empty = the server's charset default.
+        defaultCollate: getConvar("kora_sql_default_collate", "utf8mb4_unicode_ci"),
         debug: getBoolConvar("qbsql_debug", false)
       };
       log2.setDebug(cfg.debug);
@@ -130,7 +137,12 @@ var require_config = __commonJS({
       return cfg;
     }
     __name(load, "load");
-    module2.exports = { load, parseConnectionString };
+    function connectionCollation(charset) {
+      const value = String(charset || "utf8mb4");
+      return value.includes("_") ? value : `${value}_unicode_ci`;
+    }
+    __name(connectionCollation, "connectionCollation");
+    module2.exports = { load, parseConnectionString, connectionCollation };
   }
 });
 
@@ -20662,6 +20674,7 @@ var require_pool4 = __commonJS({
     "use strict";
     var mysql = require_promise();
     var log2 = require_logger();
+    var { connectionCollation } = require_config();
     function poolOptions(cfg, connectionLimit) {
       return {
         host: cfg.connection.host,
@@ -20669,7 +20682,7 @@ var require_pool4 = __commonJS({
         user: cfg.connection.user,
         password: cfg.connection.password,
         database: cfg.connection.database,
-        charset: `${cfg.connection.charset}_unicode_ci`,
+        charset: connectionCollation(cfg.connection.charset),
         connectionLimit,
         waitForConnections: true,
         queueLimit: 0,
@@ -21223,6 +21236,7 @@ var require_execute3 = __commonJS({
           const verb = sql.trimStart().split(/\s+/, 1)[0].toUpperCase();
           if (verb === "INSERT") responses.push(result.insertId || 0);
           else if (verb === "UPDATE" || verb === "DELETE") responses.push(result.affectedRows || 0);
+          else if (Array.isArray(result) && result.length > 1) responses.push(...result);
           else if (Array.isArray(result)) {
             const row = result[0] || null;
             if (row && Object.keys(row).length === 1) responses.push(Object.values(row)[0]);
@@ -21542,7 +21556,12 @@ var require_queue = __commonJS({
           };
           this.pending.set(table, st);
         } else if (st.mode !== mode || st.writeMode !== writeMode || JSON.stringify(st.conflictKey) !== JSON.stringify(conflictKey)) {
-          throw new Error(`qbsql/queue: incompatible queue options for table ${table} while writes are pending.`);
+          if (st.rows.size > 0 || st.inFlight) {
+            throw new Error(`qbsql/queue: incompatible queue options for table ${table} while writes are pending.`);
+          }
+          st.conflictKey = conflictKey;
+          st.mode = mode;
+          st.writeMode = writeMode;
         }
         return st;
       }
@@ -21649,10 +21668,12 @@ var require_queue = __commonJS({
             }
             g.rows.push(entry);
           }
+          const keyCount = Array.isArray(st.conflictKey) ? st.conflictKey.length : 1;
           for (const g of groups.values()) {
+            const perRow = st.writeMode === "update" ? g.columns.length * (keyCount + 1) + keyCount : g.columns.length + keyCount;
             const perStatement = Math.min(
               this.cfg.maxRowsPerStatement,
-              Math.max(1, Math.floor(this.cfg.maxPlaceholders / (g.columns.length + 1)))
+              Math.max(1, Math.floor(this.cfg.maxPlaceholders / perRow))
             );
             for (let i = 0; i < g.rows.length; i += perStatement) {
               const chunk = g.rows.slice(i, i + perStatement);
@@ -21665,7 +21686,8 @@ var require_queue = __commonJS({
                 {
                   mode: st.mode,
                   dialect: this.dialect,
-                  pad: this.cfg.padToBuckets && st.mode === "assign"
+                  // Padding must not push a wide chunk past the placeholder budget.
+                  pad: this.cfg.padToBuckets && st.mode === "assign" && batch.bucketFor(chunk.length) <= perStatement
                 }
               );
               try {
@@ -21914,6 +21936,7 @@ var require_transaction = __commonJS({
       async transaction(queries, maybeParams, resource) {
         const statements = this._normalise(queries, maybeParams);
         const conn = await this.pools.write.getConnection();
+        let discard = false;
         try {
           await conn.beginTransaction();
           for (const st of statements) {
@@ -21925,6 +21948,7 @@ var require_transaction = __commonJS({
           try {
             await conn.rollback();
           } catch (_) {
+            discard = true;
           }
           console.error(`qbsql transaction rolled back: ${err.message}`);
           if (typeof globalThis.TriggerEvent === "function") {
@@ -21938,7 +21962,8 @@ var require_transaction = __commonJS({
           }
           return false;
         } finally {
-          conn.release();
+          if (discard && typeof conn.destroy === "function") conn.destroy();
+          else conn.release();
         }
       }
       // Experimental oxmysql startTransaction contract. The callback receives a
@@ -22184,6 +22209,7 @@ var require_schema = __commonJS({
         engine: input.engine || defaults.engine || "InnoDB",
         charset: input.charset || defaults.charset || "utf8mb4",
         collate: input.collate || defaults.collate || null,
+        createCollate: null,
         columns: [],
         primary: input.primary || null,
         indexes: input.indexes || [],
@@ -22196,6 +22222,10 @@ var require_schema = __commonJS({
       assertIdent(spec.engine, "engine");
       assertIdent(spec.charset, "charset");
       if (spec.collate !== null && !COLLATION.test(spec.collate)) throw new Error(`qbsql schema: invalid collation '${spec.collate}'`);
+      const createCollate = typeof defaults.createCollate === "string" ? defaults.createCollate : "";
+      if (spec.collate === null && COLLATION.test(createCollate) && createCollate.toLowerCase().startsWith(spec.charset.toLowerCase() + "_")) {
+        spec.createCollate = createCollate;
+      }
       const seen = /* @__PURE__ */ new Set();
       for (const col of input.columns) {
         assertIdent(col && col.name, "column name");
@@ -22319,7 +22349,7 @@ var require_schema = __commonJS({
       let sql = `CREATE TABLE IF NOT EXISTS ${q(spec.name)} (
   ${lines.join(",\n  ")}
 ) ENGINE=${spec.engine} DEFAULT CHARSET=${spec.charset}`;
-      if (spec.collate) sql += ` COLLATE=${spec.collate}`;
+      if (spec.collate || spec.createCollate) sql += ` COLLATE=${spec.collate || spec.createCollate}`;
       if (spec.comment) sql += ` COMMENT=${escape(spec.comment)}`;
       return sql;
     }
@@ -22683,16 +22713,18 @@ var require_exports = __commonJS({
       dataExport("awaitTables", (names, timeoutMs, resource) => api2.schema.awaitTables(names, timeoutMs, resource));
       dataExport("prepareWarm", (sqlList) => api2.prepareWarm(sqlList));
       exports3("stats", (cb) => {
-        const s = api2.stats.summary(api2.statements.summary());
+        const s = api2.stats && api2.statements ? api2.stats.summary(api2.statements.summary()) : null;
         if (cb) cb(s);
         return s;
       });
       exports3("slowQueries", (limit, cb) => {
-        const s = api2.stats.slowQueries(limit);
+        const s = api2.stats ? api2.stats.slowQueries(limit) : [];
         if (cb) cb(s);
         return s;
       });
-      exports3("resetStats", () => api2.stats.reset());
+      exports3("resetStats", () => {
+        if (api2.stats) api2.stats.reset();
+      });
     }
     __name(register2, "register");
     module2.exports = { register: register2 };
@@ -22847,22 +22879,34 @@ async function boot() {
       );
     }, "onRetry")
   });
+  if (stopping) {
+    await Promise.allSettled([pools.read.end(), pools.write.end()]);
+    const stopped = new Error("qbsql stopped while waiting for the database");
+    stopped.code = "QBSQL_STOPPING";
+    throw stopped;
+  }
   api.pools = pools;
   const legacyInventory = createLegacyInventoryBridge({
     getState: /* @__PURE__ */ __name(() => GetResourceState("kora_inventory"), "getState"),
-    request: /* @__PURE__ */ __name((callback) => registerExport.qbinventory.deleteLegacyPoliceTrash(callback), "request"),
+    request: /* @__PURE__ */ __name((callback) => registerExport.kora_inventory.deleteLegacyPoliceTrash(callback), "request"),
     onStop: /* @__PURE__ */ __name((callback) => on("onResourceStop", callback), "onStop")
   });
   const legacyHousing = createLegacyHousingBridge({
     getState: /* @__PURE__ */ __name(() => GetResourceState("kora_housing"), "getState"),
-    request: /* @__PURE__ */ __name((operation, args, callback) => registerExport.qbhousing.readLegacyHousing(operation, args, callback), "request"),
+    request: /* @__PURE__ */ __name((operation, args, callback) => registerExport.kora_housing.readLegacyHousing(operation, args, callback), "request"),
     onStop: /* @__PURE__ */ __name((callback) => on("onResourceStop", callback), "onStop")
   });
   api.executor = new Executor(pools, api.statements, api.stats, legacyInventory, legacyHousing);
   api.queue = new WriteQueue(api.executor, pools, api.stats, cfg);
   api.txn = new TransactionRunner(pools);
-  api.schema = new SchemaManager(pools);
-  await api.schema.ensureTable(DEADLETTER_TABLE, "kora_sql");
+  api.schema = new SchemaManager(pools, { createCollate: cfg.defaultCollate });
+  await connectWithRetry(() => api.schema.ensureTable(DEADLETTER_TABLE, "kora_sql"), cfg, {
+    retryInterval: cfg.connectRetryInterval,
+    shouldStop: /* @__PURE__ */ __name(() => stopping, "shouldStop"),
+    onRetry: /* @__PURE__ */ __name((err, attempt, retryInterval) => {
+      log.warn("index", `dead-letter table setup failed (${err.code || err.message}); retry ${attempt} in ${retryInterval}ms`);
+    }, "onRetry")
+  });
   api._ready = true;
   api._readyResolve(true);
   emit("qbsql:internal:ready", api.version());
@@ -22885,7 +22929,7 @@ boot().catch((err) => {
 on("onResourceStop", (resourceName) => {
   if (resourceName !== GetCurrentResourceName()) return;
   stopping = true;
-  if (api.queue) {
-    api.queue.flush().catch((e) => log.error("index", `stop-flush failed: ${e.message}`));
-  }
+  const pools = api.pools;
+  const drained = api.queue ? api.queue.flush().catch((e) => log.error("index", `stop-flush failed: ${e.message}`)) : Promise.resolve();
+  if (pools) drained.finally(() => Promise.allSettled([pools.read.end(), pools.write.end()]));
 });

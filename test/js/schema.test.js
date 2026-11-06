@@ -256,3 +256,20 @@ test('awaitTables resolves when the tables appear and times out naming the missi
     await assert.rejects(new SchemaManager(never).awaitTables(['bad name'], 300, 'demo'), /list of table names/);
     await assert.rejects(new SchemaManager(never).awaitTables([], 300, 'demo'), /list of table names/);
 });
+
+test('a CREATE without an explicit collate uses the configured default; existing tables are not compared to it', async () => {
+    const { pools, executed } = fakePools();
+    const manager = new SchemaManager(pools, { createCollate: 'utf8mb4_unicode_ci' });
+    await manager.ensureTable({ name: 't', columns: [{ name: 'id', type: 'int' }, { name: 'cid', type: 'varchar(50)' }] }, 'demo');
+    const create = executed.find((e) => e.text.startsWith('CREATE TABLE'));
+    assert.match(create.text, /DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci$/);
+    assert.ok(!/`cid` varchar\(50\) COLLATE/.test(create.text), 'columns inherit the table default');
+
+    // An explicit collate wins; a default for another charset is ignored.
+    assert.match(buildCreate(validateSpec(spec(), { createCollate: 'utf8mb4_general_ci' })), /COLLATE=utf8mb4_unicode_ci$/);
+    assert.ok(!/COLLATE=/.test(buildCreate(validateSpec({ name: 'l', charset: 'latin1', columns: [{ name: 'id', type: 'int' }] }, { createCollate: 'utf8mb4_unicode_ci' }))));
+
+    const s = validateSpec({ name: 'old', columns: [{ name: 'cid', type: 'varchar(50)' }] });
+    const actual = { columns: [{ COLUMN_NAME: 'cid', COLUMN_TYPE: 'varchar(50)', IS_NULLABLE: 'NO', COLLATION_NAME: 'utf8mb4_0900_ai_ci' }], indexes: [], foreign: [], checks: [] };
+    assert.deepEqual(diff(validateSpec({ name: 'old', columns: s.columns }, { createCollate: 'utf8mb4_unicode_ci' }), actual).warnings, []);
+});

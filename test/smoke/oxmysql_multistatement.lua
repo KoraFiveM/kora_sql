@@ -40,6 +40,17 @@ h.test('false/0/no/empty/other values keep it refused (matches JS parsing)', fun
     end
 end)
 
+h.test('a refusal answers a cross-resource callback (function reference table), also in the params slot', function()
+    convars = {}
+    local err
+    local ref = setmetatable({ __cfx_functionReference = 'ref' }, { __call = function(_, _, e) err = e end })
+    handle.getExport('oxmysql', 'query')(MULTI, {}, ref)
+    h.assertEqual(err, 'multi-statement refused')
+    err = nil
+    handle.getExport('oxmysql', 'query')(MULTI, ref)
+    h.assertEqual(err, 'multi-statement refused')
+end)
+
 h.test('single statements are unaffected either way', function()
     convars = {}
     local err = 'x'

@@ -259,6 +259,8 @@ class Executor {
             const verb = sql.trimStart().split(/\s+/, 1)[0].toUpperCase();
             if (verb === 'INSERT') responses.push(result.insertId || 0);
             else if (verb === 'UPDATE' || verb === 'DELETE') responses.push(result.affectedRows || 0);
+            // Like oxmysql, a multi-row SELECT returns every row, not just the first.
+            else if (Array.isArray(result) && result.length > 1) responses.push(...result);
             else if (Array.isArray(result)) {
                 const row = result[0] || null;
                 if (row && Object.keys(row).length === 1) responses.push(Object.values(row)[0]);
