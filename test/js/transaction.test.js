@@ -305,3 +305,40 @@ test('transaction discards a connection whose rollback failed instead of returni
         globalThis.TriggerEvent = previous;
     }
 });
+
+// REVIEW2 H1: array binds must keep expanding (text protocol) inside
+// transactions, startTransaction and batch -- the binary protocol would
+// JSON-encode `IN (?)` into one string and silently match nothing.
+test('H1: statements with an array bind use the text protocol in transaction/startTransaction/batch', async () => {
+    const { runner, calls } = harness();
+    await runner.transaction([
+        { query: 'UPDATE t SET v = 1 WHERE id IN (?)', values: [[1, 2, 3]] },
+        { query: 'UPDATE t SET v = 2 WHERE id = ?', values: [4] },
+    ]);
+    const kinds = calls.filter(([k]) => k === 'query' || k === 'execute');
+    assert.deepEqual(kinds[0], ['query', 'UPDATE t SET v = 1 WHERE id IN (?)', [[1, 2, 3]]]);
+    assert.equal(kinds[1][0], 'execute', 'scalar binds stay prepared');
+
+    calls.length = 0;
+    await runner.batch([{ query: 'DELETE FROM t WHERE id IN (?)', values: [[5, 6]] }]);
+    assert.deepEqual(calls.find(([k]) => k === 'query' || k === 'execute'), ['query', 'DELETE FROM t WHERE id IN (?)', [[5, 6]]]);
+
+    calls.length = 0;
+    await runner.startTransaction(async (query) => {
+        await query('DELETE FROM t WHERE id IN (?)', [[7, 8]]);
+        await query('DELETE FROM t WHERE id IN (:ids)', { ids: [9] });
+    });
+    const ran = calls.filter(([k]) => k === 'query' || k === 'execute');
+    assert.deepEqual(ran.map(([k]) => k), ['query', 'query']);
+    assert.deepEqual(ran[0][2], [[7, 8]]);
+    assert.deepEqual(ran[1][2], { ids: [9] });
+});
+
+test('L1: a plain-object bind on the text path is sent as JSON, never "[object Object]"', async () => {
+    const { runner, calls } = harness();
+    await runner.transaction([
+        { query: 'UPDATE t SET meta = ? WHERE id IN (?)', values: [{ a: 1 }, [1, { b: 2 }]] },
+    ]);
+    const q = calls.find(([k]) => k === 'query');
+    assert.deepEqual(q[2], ['{"a":1}', [1, '{"b":2}']]);
+});

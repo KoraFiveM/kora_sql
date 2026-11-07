@@ -21,7 +21,12 @@ test('S1: ?ssl= accepts oxmysql JSON and booleans', () => {
     assert.deepEqual(parseConnectionString('mysql://u:p@h/qb?ssl=true').ssl, {});
     assert.equal(parseConnectionString('mysql://u:p@h/qb?ssl=false').ssl, undefined);
     assert.equal(parseConnectionString('mysql://u:p@h/qb').ssl, undefined);
-    assert.throws(() => parseConnectionString('mysql://u:p@h/qb?ssl={broken'), /ssl must be/);
+    // Unsupported values warn and fall back instead of stopping boot.
+    for (const bad of ['{broken', 'preferred', 'maybe']) {
+        const { result, warnings } = captureWarnings(() => parseConnectionString(`mysql://u:p@h/qb?ssl=${bad}`));
+        assert.equal(result.ssl, undefined, bad);
+        assert.match(warnings.join('\n'), /NOT encrypted/, bad);
+    }
 });
 
 test('S1: sslmode spellings map onto mysql2 ssl options', () => {
@@ -34,7 +39,9 @@ test('S1: sslmode spellings map onto mysql2 ssl options', () => {
     const { result, warnings } = captureWarnings(() => parseConnectionString('mysql://u:p@h/qb?sslmode=preferred'));
     assert.equal(result.ssl, undefined);
     assert.match(warnings[0], /NOT encrypted/);
-    assert.throws(() => parseConnectionString('mysql://u:p@h/qb?sslmode=bogus'), /unsupported sslmode/);
+    const bogus = captureWarnings(() => parseConnectionString('mysql://u:p@h/qb?sslmode=bogus'));
+    assert.equal(bogus.result.ssl, undefined);
+    assert.match(bogus.warnings[0], /unsupported sslmode/);
 });
 
 test('S1: connectTimeout and charset are applied; other options warn instead of vanishing', () => {

@@ -52,7 +52,12 @@ function parseSsl(value) {
     let parsed;
     try { parsed = JSON.parse(text); } catch (_) { parsed = undefined; }
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
-    throw new Error(`qbsql: connection string option ssl must be true/false or a JSON object, got '${text.slice(0, 64)}'`);
+    // Anything else (ssl=preferred, a broken JSON object, ...) must not stop
+    // boot: warn and fall back to sslmode semantics or, failing that, to an
+    // unencrypted connection (what an unrecognised ssl= value did before).
+    if (/^(?:prefer(?:red)?|none)$/i.test(text)) return parseSslMode(text);
+    log.warn('config', `connection string option ssl must be true/false or a JSON object, got '${text.slice(0, 64)}'; ignoring it, the connection is NOT encrypted`);
+    return undefined;
 }
 
 // sslmode in the libpq / MySQL / .NET connector spellings some hosts document
@@ -67,7 +72,8 @@ function parseSslMode(value) {
     }
     if (mode === 'require' || mode === 'required') return { rejectUnauthorized: false };
     if (mode === 'verifyca' || mode === 'verifyfull' || mode === 'verifyidentity') return { rejectUnauthorized: true };
-    throw new Error(`qbsql: unsupported sslmode '${value}' (use disable, require, verify-ca or verify-full)`);
+    log.warn('config', `unsupported sslmode '${value}' (use disable, require, verify-ca or verify-full); ignoring it, the connection is NOT encrypted`);
+    return undefined;
 }
 
 // Apply one connection-string option. Only options with a meaning here are

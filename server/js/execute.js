@@ -98,14 +98,52 @@ function hasNoBinds(params) {
     return Array.isArray(params) && params.length === 0;
 }
 
+// A bind value the binary protocol would mangle: mysql2's execute()
+// JSON-encodes an array or object into ONE string, so `id IN (?)` with
+// {1,2,3} becomes `id IN ('[1,2,3]')` and silently matches nothing. The text
+// protocol expands arrays into `1,2,3`, which is what these statements always
+// meant (transactions/batch used the text protocol until 21f100a).
+function isPlainObject(v) {
+    if (v === null || typeof v !== 'object') return false;
+    const proto = Object.getPrototypeOf(v);
+    return proto === Object.prototype || proto === null;
+}
+function needsTextProtocol(params) {
+    if (!params || typeof params !== 'object') return false;
+    const values = Array.isArray(params) ? params : Object.values(params);
+    return values.some((v) => Array.isArray(v) || isPlainObject(v));
+}
+
+// The text path runs with `stringifyObjects`, under which sqlstring writes a
+// plain-object bind as the literal '[object Object]'. A Lua table bound for a
+// JSON column means its JSON text, so encode plain objects explicitly (also
+// inside array binds). Arrays stay arrays: the text protocol expands them into
+// value lists. Named-placeholder maps are rebuilt value by value.
+function encodeTextValue(v, depth) {
+    if (isPlainObject(v)) return JSON.stringify(v);
+    if (Array.isArray(v) && depth < 2) return v.map((x) => encodeTextValue(x, depth + 1));
+    return v;
+}
+function textParams(params) {
+    if (Array.isArray(params)) return params.map((v) => encodeTextValue(v, 0));
+    if (isPlainObject(params)) {
+        const out = {};
+        for (const [k, v] of Object.entries(params)) out[k] = encodeTextValue(v, 0);
+        return out;
+    }
+    return params;
+}
+
 // Run one statement on a pinned connection (transactions, batch). Same
 // policy as Executor.runRaw: bound statements use the binary protocol, where
 // bind values are inert, with the unpreparable fallback paid once per text;
-// parameter-less statements use the text protocol. The text path runs with
-// the pools' `stringifyObjects`, so an object bind is never expanded into
-// `col = value` assignments.
+// parameter-less statements use the text protocol. A statement with an array
+// or object bind also uses the text protocol (see needsTextProtocol), so
+// `IN (?)` keeps expanding. The text path runs with the pools'
+// `stringifyObjects`, so an object bind is never expanded into `col = value`
+// assignments; textParams JSON-encodes it instead.
 async function runOnConnection(conn, sql, params, statements) {
-    if (!hasNoBinds(params) && (!statements || statements.isPreparable(sql))) {
+    if (!hasNoBinds(params) && !needsTextProtocol(params) && (!statements || statements.isPreparable(sql))) {
         try {
             const result = await conn.execute(sql, params);
             if (statements) statements.recordHit(sql);
@@ -116,7 +154,7 @@ async function runOnConnection(conn, sql, params, statements) {
             log.debug('execute', `unpreparable, falling back to query(): ${sql}`);
         }
     }
-    return conn.query(sql, params);
+    return conn.query(sql, textParams(params));
 }
 
 // oxmysql's prepare/rawExecute accept one parameter list or an array of lists.
@@ -183,7 +221,7 @@ class Executor {
     // Text protocol. `cast` defaults to the full oxmysql text typeCast, which
     // the unpreparable fallback has always used.
     _query(pool, sql, params, cast) {
-        return pool.query(...this._args(pool, sql, params, this._oxTypeCast ? (cast || typeCast) : null));
+        return pool.query(...this._args(pool, sql, textParams(params), this._oxTypeCast ? (cast || typeCast) : null));
     }
 
     _execute(pool, sql, params) {
@@ -341,4 +379,4 @@ class Executor {
     }
 }
 
-module.exports = { Executor, normalizeParams, normalizeNamedPlaceholders, runOnConnection, hasNoBinds, NULL_SENTINEL };
+module.exports = { Executor, normalizeParams, normalizeNamedPlaceholders, runOnConnection, hasNoBinds, needsTextProtocol, textParams, NULL_SENTINEL };

@@ -71,7 +71,9 @@ var require_config = __commonJS({
         parsed = void 0;
       }
       if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
-      throw new Error(`qbsql: connection string option ssl must be true/false or a JSON object, got '${text.slice(0, 64)}'`);
+      if (/^(?:prefer(?:red)?|none)$/i.test(text)) return parseSslMode(text);
+      log2.warn("config", `connection string option ssl must be true/false or a JSON object, got '${text.slice(0, 64)}'; ignoring it, the connection is NOT encrypted`);
+      return void 0;
     }
     __name(parseSsl, "parseSsl");
     function parseSslMode(value) {
@@ -83,7 +85,8 @@ var require_config = __commonJS({
       }
       if (mode === "require" || mode === "required") return { rejectUnauthorized: false };
       if (mode === "verifyca" || mode === "verifyfull" || mode === "verifyidentity") return { rejectUnauthorized: true };
-      throw new Error(`qbsql: unsupported sslmode '${value}' (use disable, require, verify-ca or verify-full)`);
+      log2.warn("config", `unsupported sslmode '${value}' (use disable, require, verify-ca or verify-full); ignoring it, the connection is NOT encrypted`);
+      return void 0;
     }
     __name(parseSslMode, "parseSslMode");
     function applyOption(out, key, value) {
@@ -20852,19 +20855,36 @@ var require_pool4 = __commonJS({
       };
     }
     __name(withAcquireTimeout, "withAcquireTimeout");
-    function sessionTimeoutSql(conn, ms) {
-      return conn._isMariaDB ? `SET SESSION max_statement_time = ${(ms / 1e3).toFixed(3)}` : `SET SESSION max_execution_time = ${Math.floor(ms)}`;
+    function isMariaConnection(conn) {
+      if (typeof conn._isMariaDB === "boolean") return conn._isMariaDB;
+      const version = conn._handshakePacket && conn._handshakePacket.serverVersion;
+      return typeof version === "string" && /mariadb/i.test(version);
+    }
+    __name(isMariaConnection, "isMariaConnection");
+    function sessionTimeoutSql(conn, ms, mariadb = isMariaConnection(conn)) {
+      return mariadb ? `SET SESSION max_statement_time = ${(ms / 1e3).toFixed(3)}` : `SET SESSION max_execution_time = ${Math.floor(ms)}`;
     }
     __name(sessionTimeoutSql, "sessionTimeoutSql");
+    var UNKNOWN_VARIABLE = /* @__PURE__ */ new Set(["ER_UNKNOWN_SYSTEM_VARIABLE", "ER_UNKNOWN_SYSTEM_VARIABLE_NAME"]);
     function limitReadStatements(pool, ms) {
       if (!ms) return;
       let warned = false;
+      const warn = /* @__PURE__ */ __name((err) => {
+        if (warned) return;
+        warned = true;
+        log2.warn("pool", `could not set a server-side read timeout (${err.message}); only the client-side timeout applies`);
+      }, "warn");
       pool.on("connection", (conn) => {
-        conn.query(sessionTimeoutSql(conn, ms), (err) => {
-          if (err && !warned) {
-            warned = true;
-            log2.warn("pool", `could not set a server-side read timeout (${err.message}); only the client-side timeout applies`);
+        const mariadb = isMariaConnection(conn);
+        conn.query(sessionTimeoutSql(conn, ms, mariadb), (err) => {
+          if (!err) return;
+          if (!UNKNOWN_VARIABLE.has(err.code) && err.errno !== 1193) {
+            warn(err);
+            return;
           }
+          conn.query(sessionTimeoutSql(conn, ms, !mariadb), (err2) => {
+            if (err2) warn(err2);
+          });
         });
       });
     }
@@ -20902,7 +20922,7 @@ var require_pool4 = __commonJS({
       return [pools.read, pools.write, pools.flush].filter(Boolean);
     }
     __name(all, "all");
-    module2.exports = { build, all, poolOptions, withAcquireTimeout, sessionTimeoutSql };
+    module2.exports = { build, all, poolOptions, withAcquireTimeout, sessionTimeoutSql, limitReadStatements };
   }
 });
 
@@ -21307,8 +21327,36 @@ var require_execute3 = __commonJS({
       return Array.isArray(params) && params.length === 0;
     }
     __name(hasNoBinds, "hasNoBinds");
+    function isPlainObject(v) {
+      if (v === null || typeof v !== "object") return false;
+      const proto = Object.getPrototypeOf(v);
+      return proto === Object.prototype || proto === null;
+    }
+    __name(isPlainObject, "isPlainObject");
+    function needsTextProtocol(params) {
+      if (!params || typeof params !== "object") return false;
+      const values = Array.isArray(params) ? params : Object.values(params);
+      return values.some((v) => Array.isArray(v) || isPlainObject(v));
+    }
+    __name(needsTextProtocol, "needsTextProtocol");
+    function encodeTextValue(v, depth) {
+      if (isPlainObject(v)) return JSON.stringify(v);
+      if (Array.isArray(v) && depth < 2) return v.map((x) => encodeTextValue(x, depth + 1));
+      return v;
+    }
+    __name(encodeTextValue, "encodeTextValue");
+    function textParams(params) {
+      if (Array.isArray(params)) return params.map((v) => encodeTextValue(v, 0));
+      if (isPlainObject(params)) {
+        const out = {};
+        for (const [k, v] of Object.entries(params)) out[k] = encodeTextValue(v, 0);
+        return out;
+      }
+      return params;
+    }
+    __name(textParams, "textParams");
     async function runOnConnection(conn, sql, params, statements) {
-      if (!hasNoBinds(params) && (!statements || statements.isPreparable(sql))) {
+      if (!hasNoBinds(params) && !needsTextProtocol(params) && (!statements || statements.isPreparable(sql))) {
         try {
           const result = await conn.execute(sql, params);
           if (statements) statements.recordHit(sql);
@@ -21319,7 +21367,7 @@ var require_execute3 = __commonJS({
           log2.debug("execute", `unpreparable, falling back to query(): ${sql}`);
         }
       }
-      return conn.query(sql, params);
+      return conn.query(sql, textParams(params));
     }
     __name(runOnConnection, "runOnConnection");
     function toParamSets(params) {
@@ -21376,7 +21424,7 @@ var require_execute3 = __commonJS({
       // Text protocol. `cast` defaults to the full oxmysql text typeCast, which
       // the unpreparable fallback has always used.
       _query(pool, sql, params, cast) {
-        return pool.query(...this._args(pool, sql, params, this._oxTypeCast ? cast || typeCast : null));
+        return pool.query(...this._args(pool, sql, textParams(params), this._oxTypeCast ? cast || typeCast : null));
       }
       _execute(pool, sql, params) {
         return pool.execute(...this._args(pool, sql, params, this._oxTypeCast ? typeCastExecute : null));
@@ -21506,7 +21554,7 @@ var require_execute3 = __commonJS({
     };
     __name(_Executor, "Executor");
     var Executor2 = _Executor;
-    module2.exports = { Executor: Executor2, normalizeParams, normalizeNamedPlaceholders, runOnConnection, hasNoBinds, NULL_SENTINEL };
+    module2.exports = { Executor: Executor2, normalizeParams, normalizeNamedPlaceholders, runOnConnection, hasNoBinds, needsTextProtocol, textParams, NULL_SENTINEL };
   }
 });
 
@@ -21571,6 +21619,7 @@ var require_legacy_inventory = __commonJS({
 var require_legacy_housing = __commonJS({
   "server/js/legacy-housing.js"(exports2, module2) {
     "use strict";
+    var log2 = require_logger();
     function stockRead(sql, params) {
       if (typeof sql !== "string") return null;
       const text = sql.trim().replace(/;$/, "").trim().replace(/`(houselocations|player_houses|name|house|owned|identifier|citizenid)`/gi, "$1").replace(/\s+/g, " ").replace(/\s*=\s*/g, " = ");
@@ -21608,6 +21657,7 @@ var require_legacy_housing = __commonJS({
     __name(touchesStockTables, "touchesStockTables");
     function createLegacyHousingBridge2({ getState, request, onStop }) {
       const pending = /* @__PURE__ */ new Set();
+      const routed = /* @__PURE__ */ new Set();
       let selected = false;
       onStop((name) => {
         if (name !== "kora_housing" && name !== "kora_sql") return;
@@ -21620,6 +21670,11 @@ var require_legacy_housing = __commonJS({
         if (state === "started" || state === "starting") selected = true;
         else if (!selected) return null;
         else return Promise.reject(new Error("Native housing stopped; stock tables are archival"));
+        const who = resource || "unknown";
+        if (!routed.has(who) && routed.size < 256) {
+          routed.add(who);
+          log2.info("housing", `${who}: SQL mentioning houselocations/player_houses is routed to native housing: ${String(sql).slice(0, 160)}`);
+        }
         const read = stockRead(sql, params);
         if (!read) return Promise.reject(new Error("Unsupported stock housing SQL while native housing owns these records"));
         return new Promise((resolve, reject) => {
@@ -21774,7 +21829,14 @@ var require_queue = __commonJS({
     "use strict";
     var batch = require_batch();
     var log2 = require_logger();
+    var crypto = require("crypto");
     var { isIdent } = require_ident();
+    function invalid(reason, message) {
+      const err = new TypeError(message);
+      err.reason = reason;
+      return err;
+    }
+    __name(invalid, "invalid");
     var NULL_SENTINEL = "\0qbsql:null\0";
     function normalizeWriteParams(params) {
       return Array.from(params, (value) => value === void 0 || value === NULL_SENTINEL ? null : value);
@@ -21789,17 +21851,34 @@ var require_queue = __commonJS({
       } else if (typeof value === "boolean") {
         return value ? "1" : "0";
       }
-      throw new TypeError(`qbsql/queue: primary key values must be strings or finite numbers (got ${value === null ? "null" : typeof value === "number" ? String(value) : typeof value})`);
+      throw invalid("bad-pk", `qbsql/queue: primary key values must be strings or finite numbers (got ${value === null || value === void 0 ? "nil" : typeof value === "number" ? String(value) : typeof value})`);
     }
     __name(pkComponent, "pkComponent");
     function pkKey(pk) {
       return JSON.stringify(Array.isArray(pk) ? pk.map(pkComponent) : [pkComponent(pk)]);
     }
     __name(pkKey, "pkKey");
+    var DEADLETTER_PK_MAX = 191;
     function deadLetterPk(pk) {
-      return Array.isArray(pk) ? JSON.stringify(pk) : String(pk);
+      let text;
+      try {
+        text = Array.isArray(pk) ? JSON.stringify(pk.map(pkComponent)) : pkComponent(pk);
+      } catch (_) {
+        text = String(pk);
+      }
+      if (text.length <= DEADLETTER_PK_MAX) return text;
+      const hash = crypto.createHash("sha256").update(text).digest("hex").slice(0, 40);
+      return `${text.slice(0, DEADLETTER_PK_MAX - 45)}~sha:${hash}`;
     }
     __name(deadLetterPk, "deadLetterPk");
+    function safeJson(value) {
+      try {
+        return JSON.stringify(value, (_k, v) => typeof v === "bigint" ? String(v) : v);
+      } catch (err) {
+        return JSON.stringify({ unserialisable: String(err && err.message) });
+      }
+    }
+    __name(safeJson, "safeJson");
     var DECIMAL = /^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/;
     function accumulateValue(table, column, value) {
       if (typeof value === "number" && Number.isFinite(value)) return value;
@@ -21807,14 +21886,24 @@ var require_queue = __commonJS({
         const n = Number(value);
         if (Number.isFinite(n)) return n;
       }
-      throw new TypeError(`qbsql/queue: accumulate mode needs a finite number for ${table}.${column} (got ${typeof value === "string" ? `'${value.slice(0, 32)}'` : String(value)})`);
+      throw invalid("accumulate-value", `qbsql/queue: accumulate mode needs a finite number for ${table}.${column} (got ${typeof value === "string" ? `'${value.slice(0, 32)}'` : String(value)})`);
     }
     __name(accumulateValue, "accumulateValue");
-    var DETERMINISTIC_WRITE_ERRORS = /* @__PURE__ */ new Set([
+    var STATEMENT_LEVEL_WRITE_ERRORS = /* @__PURE__ */ new Set([
       "ER_BAD_FIELD_ERROR",
       "ER_NO_SUCH_TABLE",
       "ER_BAD_TABLE_ERROR",
       "ER_PARSE_ERROR",
+      "ER_WRONG_VALUE_COUNT_ON_ROW",
+      "ER_NON_UNIQ_ERROR",
+      "ER_TABLEACCESS_DENIED_ERROR",
+      "ER_COLUMNACCESS_DENIED_ERROR"
+    ]);
+    var NO_SUCH_TABLE_RETRIES = 2;
+    var NO_SUCH_TABLE_BACKOFF_MS = 1e3;
+    var MAX_DEADLETTER_ATTEMPTS = 3;
+    var DETERMINISTIC_WRITE_ERRORS = /* @__PURE__ */ new Set([
+      ...STATEMENT_LEVEL_WRITE_ERRORS,
       "ER_DATA_TOO_LONG",
       "ER_TRUNCATED_WRONG_VALUE",
       "ER_TRUNCATED_WRONG_VALUE_FOR_FIELD",
@@ -21872,7 +21961,7 @@ var require_queue = __commonJS({
         indexes.get(name).add(String(row.COLUMN_NAME).toLowerCase());
       }
       for (const cols of indexes.values()) {
-        if (cols.size === want.size && [...want].every((c) => cols.has(c))) return true;
+        if (cols.size > 0 && [...cols].every((c) => want.has(c))) return true;
       }
       return false;
     }
@@ -21897,6 +21986,8 @@ var require_queue = __commonJS({
         this.timer = null;
         this.dialect = batch.dialectFor(pools.version);
         this.verifiedKeys = /* @__PURE__ */ new Set();
+        this.verifyFailures = /* @__PURE__ */ new Map();
+        this.warnedRejects = /* @__PURE__ */ new Set();
       }
       // The flush writes on its own pool when one is configured, so ad-hoc
       // writes and long transactions cannot starve the save path.
@@ -21911,6 +22002,8 @@ var require_queue = __commonJS({
             mode,
             writeMode,
             rows: /* @__PURE__ */ new Map(),
+            // pk key -> dead-letter attempts that failed (see M2 cap).
+            poison: /* @__PURE__ */ new Map(),
             generation: 0,
             completedGeneration: 0,
             flushing: false,
@@ -21919,7 +22012,7 @@ var require_queue = __commonJS({
           this.pending.set(table, st);
         } else if (st.mode !== mode || st.writeMode !== writeMode || JSON.stringify(st.conflictKey) !== JSON.stringify(conflictKey)) {
           if (st.rows.size > 0 || st.inFlight) {
-            throw new Error(`qbsql/queue: incompatible queue options for table ${table} while writes are pending.`);
+            throw invalid("incompatible-options", `qbsql/queue: incompatible queue options for table ${table} while writes are pending.`);
           }
           st.conflictKey = conflictKey;
           st.mode = mode;
@@ -21947,25 +22040,30 @@ var require_queue = __commonJS({
             "queue",
             `conflict key (${keyCols.join(", ")}) on ${table} is not a PRIMARY or UNIQUE index: upserts will insert duplicate rows instead of updating, and update writes scan the table.`
           );
-        }).catch((err) => log2.debug("queue", `could not verify the conflict key of ${table}: ${err.message}`));
+        }).then(() => this.verifyFailures.delete(id)).catch((err) => {
+          const failures = (this.verifyFailures.get(id) || 0) + 1;
+          this.verifyFailures.set(id, failures);
+          if (failures < 3) this.verifiedKeys.delete(id);
+          log2.debug("queue", `could not verify the conflict key of ${table}: ${err.message}`);
+        });
       }
       // Validate a call's table, key and options. Returns the normalised key
       // column list. Throws synchronously, before anything is queued.
       _checkTarget(table, conflictKey, opts) {
-        if (!isIdent(table)) throw new TypeError(`qbsql/queue: invalid table name '${table}'`);
+        if (!isIdent(table)) throw invalid("bad-table", `qbsql/queue: invalid table name '${table}'`);
         const keyCols = Array.isArray(conflictKey) ? conflictKey : [conflictKey];
         if (keyCols.length === 0 || !keyCols.every(isIdent)) {
-          throw new TypeError(`qbsql/queue: invalid conflict key for ${table}`);
+          throw invalid("bad-key", `qbsql/queue: invalid conflict key for ${table}`);
         }
         const mode = opts.mode || "assign";
-        if (mode !== "assign" && mode !== "accumulate") throw new Error(`qbsql/queue: unsupported mode '${mode}'.`);
+        if (mode !== "assign" && mode !== "accumulate") throw invalid("bad-mode", `qbsql/queue: unsupported mode '${mode}'.`);
         const writeMode = opts.writeMode || "upsert";
         if (writeMode !== "upsert" && writeMode !== "update") {
-          throw new Error(`qbsql/queue: unsupported writeMode '${writeMode}'.`);
+          throw invalid("bad-write-mode", `qbsql/queue: unsupported writeMode '${writeMode}'.`);
         }
         let allowed = null;
         if (opts.allowedColumns !== void 0 && opts.allowedColumns !== null) {
-          if (!Array.isArray(opts.allowedColumns)) throw new TypeError("qbsql/queue: allowedColumns must be a list of column names");
+          if (!Array.isArray(opts.allowedColumns)) throw invalid("bad-allowed-columns", "qbsql/queue: allowedColumns must be a list of column names");
           allowed = new Set(opts.allowedColumns.map((c) => String(c).toLowerCase()));
         }
         return { keyCols, mode, writeMode, allowed };
@@ -21975,22 +22073,22 @@ var require_queue = __commonJS({
       // (with opts.allowedColumns) only the columns the caller allowed.
       _prepareRow(table, target, row) {
         if (!row || typeof row !== "object" || !row.cols || typeof row.cols !== "object" || Array.isArray(row.cols)) {
-          throw new TypeError(`qbsql/queue: rows for ${table} must be { pk = ..., cols = { ... } }`);
+          throw invalid("bad-row", `qbsql/queue: rows for ${table} must be { pk = ..., cols = { ... } }`);
         }
         const { keyCols, mode, allowed } = target;
         if (Array.isArray(row.pk) ? row.pk.length !== keyCols.length : keyCols.length !== 1) {
-          throw new TypeError(`qbsql/queue: ${table} needs ${keyCols.length} primary key value(s) per row`);
+          throw invalid("pk-arity", `qbsql/queue: ${table} needs ${keyCols.length} primary key value(s) per row`);
         }
         const key = pkKey(row.pk);
         const keySet = new Set(keyCols.map((c) => c.toLowerCase()));
         const cols = {};
         const names = Object.keys(row.cols);
-        if (names.length === 0) throw new TypeError(`qbsql/queue: a row for ${table} has no columns to write`);
+        if (names.length === 0) throw invalid("no-columns", `qbsql/queue: a row for ${table} has no columns to write`);
         for (const name of names) {
-          if (!isIdent(name)) throw new TypeError(`qbsql/queue: invalid column name '${name}' for ${table}`);
+          if (!isIdent(name)) throw invalid("bad-column", `qbsql/queue: invalid column name '${name}' for ${table}`);
           const lower = name.toLowerCase();
-          if (keySet.has(lower)) throw new TypeError(`qbsql/queue: ${table}.${name} is a conflict key column and cannot be written`);
-          if (allowed && !allowed.has(lower)) throw new TypeError(`qbsql/queue: column ${table}.${name} is not in allowedColumns`);
+          if (keySet.has(lower)) throw invalid("key-column", `qbsql/queue: ${table}.${name} is a conflict key column and cannot be written`);
+          if (allowed && !allowed.has(lower)) throw invalid("not-allowed", `qbsql/queue: column ${table}.${name} is not in allowedColumns`);
           cols[name] = mode === "accumulate" ? accumulateValue(table, name, row.cols[name]) : row.cols[name];
         }
         return { key, pk: row.pk, cols };
@@ -22014,29 +22112,78 @@ var require_queue = __commonJS({
           }
         }
       }
-      // Enqueue one row. Fire-and-forget: never returns a promise the caller
-      // waits on. `row` is { pk, cols }. Invalid input throws synchronously and
-      // queues nothing.
-      enqueue(table, conflictKey, row, opts) {
-        opts = opts || {};
-        const target = this._checkTarget(table, conflictKey, opts);
-        this._merge(table, target, [this._prepareRow(table, target, row)]);
+      // Log a rejected enqueue input once per (resource, reason), and count it.
+      _reject(resource, table, err, rows) {
+        const reason = err.reason || "error";
+        if (this.stats.queue) this.stats.queue.rejectedRows = (this.stats.queue.rejectedRows || 0) + rows;
+        const id = `${resource || "?"}|${reason}`;
+        if (this.warnedRejects.has(id)) return;
+        if (this.warnedRejects.size > 1e3) this.warnedRejects.clear();
+        this.warnedRejects.add(id);
+        log2.error(
+          "queue",
+          `dropped ${rows} invalid row(s) for ${table} from ${resource || "an unknown resource"}: ${err.message} (the rest of the call was queued; logged once per resource and reason)`
+        );
+      }
+      // Validate and merge rows. Valid rows are queued; invalid rows are dropped
+      // and logged (never thrown) so one bad row -- e.g. a player whose key is
+      // not loaded yet -- cannot cost every other row in the save batch, nor
+      // raise into the caller's save loop. With opts.strict (the awaited
+      // upsert export) validation is all-or-nothing and the first error throws.
+      // Returns { queued, dropped }.
+      _enqueue(table, conflictKey, rows, opts, resource, strict) {
+        let target;
+        try {
+          target = this._checkTarget(table, conflictKey, opts);
+        } catch (err) {
+          if (strict) throw err;
+          this._reject(resource, table, err, rows.length);
+          return { queued: 0, dropped: rows.length };
+        }
+        const prepared = [];
+        let dropped = 0;
+        for (const row of rows) {
+          try {
+            prepared.push(this._prepareRow(table, target, row));
+          } catch (err) {
+            if (strict) throw err;
+            dropped++;
+            this._reject(resource, table, err, 1);
+          }
+        }
+        if (prepared.length === 0) return { queued: 0, dropped };
+        try {
+          this._merge(table, target, prepared);
+        } catch (err) {
+          if (strict) throw err;
+          this._reject(resource, table, err, prepared.length);
+          return { queued: 0, dropped: dropped + prepared.length };
+        }
         this._scheduleOrTrip(opts.priority === "immediate" ? table : null);
+        return { queued: prepared.length, dropped };
+      }
+      // Enqueue one row. Fire-and-forget: never returns a promise the caller
+      // waits on, and never throws. `row` is { pk, cols }.
+      enqueue(table, conflictKey, row, opts, resource) {
+        return this._enqueue(table, conflictKey, [row], opts || {}, resource, false);
       }
       // Enqueue many rows in one call -- the single-boundary-crossing path.
-      // Every row is validated before any is queued, so a bad row rejects the
-      // whole call instead of leaving half of it pending. Scheduling happens
-      // once, so an 'immediate' batch is one flush rather than one per row.
-      enqueueMany(table, conflictKey, rows, opts) {
+      // Valid rows are queued even when others in the call are invalid (see
+      // _enqueue). Scheduling happens once, so an 'immediate' batch is one
+      // flush rather than one per row. opts.strict: all-or-nothing, throws.
+      enqueueMany(table, conflictKey, rows, opts, resource) {
         opts = opts || {};
+        const strict = opts.strict === true;
         this.stats.countCrossing();
         if (rows && !Array.isArray(rows) && typeof rows === "object" && Object.keys(rows).length === 0) rows = [];
-        if (!Array.isArray(rows)) throw new TypeError(`qbsql/queue: enqueueMany for ${table} needs a list of rows`);
-        const target = this._checkTarget(table, conflictKey, opts);
-        const prepared = rows.map((row) => this._prepareRow(table, target, row));
-        if (prepared.length === 0) return;
-        this._merge(table, target, prepared);
-        this._scheduleOrTrip(opts.priority === "immediate" ? table : null);
+        if (!Array.isArray(rows)) {
+          const err = invalid("not-a-list", `qbsql/queue: enqueueMany for ${table} needs a list of rows`);
+          if (strict) throw err;
+          this._reject(resource, table, err, 1);
+          return { queued: 0, dropped: 1 };
+        }
+        if (rows.length === 0) return { queued: 0, dropped: 0 };
+        return this._enqueue(table, conflictKey, rows, opts, resource, strict);
       }
       _scheduleOrTrip(immediateTable) {
         if (immediateTable) {
@@ -22206,15 +22353,63 @@ var require_queue = __commonJS({
           }
         }
       }
+      // Forget dead-letter failure counts of rows that were written.
+      _clearPoison(table, chunk) {
+        const st = this.pending.get(table);
+        if (!st || !st.poison || st.poison.size === 0) return;
+        for (const entry of chunk) st.poison.delete(pkKey(entry.pk));
+      }
+      // Dead-letter `chunk` (whose rows are already hedged into pending), then
+      // clear the hedge for every row that is now safely recorded. A row whose
+      // dead-letter insert failed stays pending for a later flush, at most
+      // MAX_DEADLETTER_ATTEMPTS times; after that it is logged in full and
+      // dropped so a poison row cannot loop forever.
+      async _deadLetterAndRelease(table, chunk, err, reMerged, mode) {
+        const failed = await this._deadLetter(table, chunk, err);
+        this.stats.queue.deadLettered += chunk.length - failed.length;
+        const st = this.pending.get(table);
+        const keep = /* @__PURE__ */ new Set();
+        for (const entry of chunk) {
+          const key = pkKey(entry.pk);
+          if (!failed.includes(entry)) {
+            if (st && st.poison) st.poison.delete(key);
+            continue;
+          }
+          const count = (st && st.poison && st.poison.get(key) || 0) + 1;
+          if (count >= MAX_DEADLETTER_ATTEMPTS) {
+            if (st && st.poison) st.poison.delete(key);
+            log2.error(
+              "queue",
+              `DROPPED ${table} row ${deadLetterPk(entry.pk)} after ${count} failed dead-letter attempts (${err && err.code}): cols_json=${safeJson(entry.cols)}`
+            );
+          } else {
+            if (st && st.poison) st.poison.set(key, count);
+            keep.add(key);
+            log2.warn("queue", `${table} row ${deadLetterPk(entry.pk)} stays pending; dead-letter attempt ${count}/${MAX_DEADLETTER_ATTEMPTS} failed`);
+          }
+        }
+        if (reMerged && keep.size) {
+          for (const key of keep) reMerged.delete(key);
+        }
+        this._clearReMerged(table, reMerged, mode);
+        return failed.length;
+      }
+      // The error a dead-lettered chunk reports to flush() callers.
+      _deadLetterError(table, what, chunk, failed) {
+        return new Error(failed ? `qbsql: write to ${table} failed ${what}; failed to dead-letter ${failed}/${chunk.length} row(s)` : `qbsql: write to ${table} failed ${what}; ${chunk.length} row(s) were dead-lettered`);
+      }
       async _writeWithRetry(table, sql, params, chunk, mode, attempt, reMerged) {
         attempt = attempt || 0;
         try {
           await this._pool().execute(sql, normalizeWriteParams(params));
           this._clearReMerged(table, reMerged, mode);
+          this._clearPoison(table, chunk);
         } catch (err) {
           this.stats.queue.retries++;
-          if (!isRetryableWriteError(err)) {
-            if (chunk.length > 1) {
+          const noSuchTableRetry = err && err.code === "ER_NO_SUCH_TABLE" && !err.fatal && attempt < NO_SUCH_TABLE_RETRIES;
+          if (!isRetryableWriteError(err) && !noSuchTableRetry) {
+            const statementLevel = STATEMENT_LEVEL_WRITE_ERRORS.has(err.code);
+            if (chunk.length > 1 && !statementLevel) {
               this._clearReMerged(table, reMerged, mode);
               const split = new Error(`qbsql: write to ${table} failed (${err.code}); bisecting ${chunk.length} rows`);
               split.bisect = true;
@@ -22222,55 +22417,53 @@ var require_queue = __commonJS({
               throw split;
             }
             reMerged = this._hedge(table, chunk, reMerged);
-            log2.error("queue", `DEAD-LETTER on ${table} (1 row, ${err.code} is not retryable): ${err.message}`);
-            await this._deadLetter(table, chunk, err);
-            this.stats.queue.deadLettered += chunk.length;
-            this._clearReMerged(table, reMerged, mode);
-            throw new Error(`qbsql: write to ${table} failed (${err.code}); ${chunk.length} row(s) were dead-lettered`);
+            log2.error("queue", `DEAD-LETTER on ${table} (${chunk.length} row(s), ${err.code} is not retryable): ${err.message}`);
+            const failed = await this._deadLetterAndRelease(table, chunk, err, reMerged, mode);
+            throw this._deadLetterError(table, `(${err.code})`, chunk, failed);
           }
           if (attempt >= 5) {
             log2.error(
               "queue",
               `DEAD-LETTER after ${attempt} retries on ${table} (${chunk.length} rows): ${err.message}`
             );
-            await this._deadLetter(table, chunk, err);
-            this.stats.queue.deadLettered += chunk.length;
-            this._clearReMerged(table, reMerged, mode);
-            throw new Error(`qbsql: write to ${table} failed after ${attempt} retries; ${chunk.length} row(s) were dead-lettered`);
+            reMerged = this._hedge(table, chunk, reMerged);
+            const failed = await this._deadLetterAndRelease(table, chunk, err, reMerged, mode);
+            throw this._deadLetterError(table, `after ${attempt} retries`, chunk, failed);
           }
           reMerged = this._hedge(table, chunk, reMerged);
-          const backoff = Math.min(2e3, 50 * Math.pow(2, attempt));
+          const backoff = noSuchTableRetry ? NO_SUCH_TABLE_BACKOFF_MS * (attempt + 1) : Math.min(2e3, 50 * Math.pow(2, attempt));
           log2.warn("queue", `write failed on ${table} (attempt ${attempt + 1}), retrying in ${backoff}ms: ${err.message}`);
           await new Promise((r) => setTimeout(r, backoff));
           await this._writeWithRetry(table, sql, params, chunk, mode, attempt + 1, reMerged);
         }
       }
+      // Best-effort persistence of unwriteable rows so they are recoverable.
+      // One multi-row INSERT; if that fails (e.g. one oversized value), fall
+      // back to row by row so one bad row cannot sink the rest. Never throws:
+      // resolves to the entries that could NOT be dead-lettered.
       async _deadLetter(table, chunk, err) {
         const head = "INSERT INTO `kora_sql_deadletter` (`table_name`,`pk`,`cols_json`,`error`,`failed_at`) VALUES ";
         const group = "(?,?,?,?,NOW())";
         const message = String(err && err.message).slice(0, 500);
-        const rows = chunk.map((entry) => [table, deadLetterPk(entry.pk), JSON.stringify(entry.cols), message]);
+        const rows = chunk.map((entry) => [String(table).slice(0, 64), deadLetterPk(entry.pk), safeJson(entry.cols), message]);
         if (rows.length > 1) {
           try {
             await this._pool().execute(head + rows.map(() => group).join(","), rows.flat());
-            return;
+            return [];
           } catch (e) {
             log2.warn("queue", `multi-row dead-letter insert for ${table} failed (${e.message}); retrying row by row`);
           }
         }
-        const failures = [];
-        for (const values of rows) {
-          const pk = values[1];
+        const failed = [];
+        for (let i = 0; i < rows.length; i++) {
           try {
-            await this._pool().execute(head + group, values);
+            await this._pool().execute(head + group, rows[i]);
           } catch (e) {
-            log2.error("queue", `dead-letter insert itself failed for ${table}/${pk}: ${e.message}`);
-            failures.push(`${pk}: ${e.message}`);
+            log2.error("queue", `dead-letter insert itself failed for ${table}/${rows[i][1]}: ${e.message}`);
+            failed.push(chunk[i]);
           }
         }
-        if (failures.length) {
-          throw new Error(`qbsql: failed to dead-letter ${failures.length}/${chunk.length} row(s): ${failures.join("; ")}`);
-        }
+        return failed;
       }
       depth() {
         const out = {};
@@ -22282,7 +22475,7 @@ var require_queue = __commonJS({
     };
     __name(_WriteQueue, "WriteQueue");
     var WriteQueue2 = _WriteQueue;
-    module2.exports = { WriteQueue: WriteQueue2, pkKey, comparePk, hasUniqueIndexOn, isRetryableWriteError };
+    module2.exports = { WriteQueue: WriteQueue2, pkKey, comparePk, hasUniqueIndexOn, isRetryableWriteError, deadLetterPk, STATEMENT_LEVEL_WRITE_ERRORS };
   }
 });
 
@@ -22833,6 +23026,7 @@ var require_schema = __commonJS({
     }
     __name(typeMatches, "typeMatches");
     var INT_RANK = { tinyint: 1, smallint: 2, mediumint: 3, int: 4, bigint: 5 };
+    var INT_DIGITS = { tinyint: 3, smallint: 5, mediumint: 8, int: 10, bigint: 20 };
     var TEXT_RANK = { tinytext: 1, text: 2, mediumtext: 3, longtext: 4 };
     var BLOB_RANK = { tinyblob: 1, blob: 2, mediumblob: 3, longblob: 4 };
     function parseColumnType(type) {
@@ -22855,8 +23049,20 @@ var require_schema = __commonJS({
       if (got === want) return true;
       const a = parseColumnType(got);
       const b = parseColumnType(want);
-      if (!a || !b || a.zerofill !== b.zerofill || a.unsigned !== b.unsigned) return false;
+      if (!a || !b || a.zerofill !== b.zerofill) return false;
+      if (a.name in INT_RANK && b.name in INT_RANK && a.unsigned && !b.unsigned) return INT_RANK[b.name] > INT_RANK[a.name];
+      if (a.name in INT_RANK && ["decimal", "numeric"].includes(b.name) && (b.unsigned === a.unsigned || !b.unsigned)) {
+        const [bp, bs = 0] = String(b.args || "10,0").split(",").map(Number);
+        return bp - bs >= INT_DIGITS[a.name];
+      }
+      if (a.unsigned !== b.unsigned) return false;
       if (a.name in INT_RANK && b.name in INT_RANK) return INT_RANK[b.name] >= INT_RANK[a.name];
+      if ((a.name === "char" || a.name === "varchar") && b.name in TEXT_RANK) {
+        return TEXT_RANK[b.name] >= 2 || Number(a.args || 1) * 4 <= 255;
+      }
+      if ((a.name === "binary" || a.name === "varbinary") && b.name in BLOB_RANK) {
+        return BLOB_RANK[b.name] >= 2 || Number(a.args || 1) <= 255;
+      }
       if (["char", "varchar", "binary", "varbinary"].includes(a.name)) {
         const sameFamily = a.name === b.name || a.name === "char" && b.name === "varchar" || a.name === "binary" && b.name === "varbinary";
         return sameFamily && Number(b.args) >= Number(a.args);
@@ -22944,11 +23150,11 @@ var require_schema = __commonJS({
         const typeDiffers = !typeMatches(want, got);
         const nullDiffers = !col.generated && wantNull !== (existing.IS_NULLABLE === "YES");
         if (col.modify === true && !col.generated && (typeDiffers || nullDiffers)) {
-          const refused = !allowModify ? "modify is disabled by kora_sql_schema_allow_modify" : spec.extend ? "an extend table never modifies existing columns" : typeDiffers && !isWidening(got, want) ? "only widening type changes are applied" : nullDiffers && !wantNull ? "NULL to NOT NULL is not applied" : null;
+          const refused = !allowModify ? "modify is disabled by kora_sql_schema_allow_modify" : spec.extend ? "an extend table never modifies existing columns" : typeDiffers && !isWidening(got, want) ? "only widening type changes are applied" : null;
           if (!refused) {
             const statement = alter(`MODIFY COLUMN ${columnDefinition(col, spec)}`);
             statements.push(statement);
-            modifies.push({ column: col.name, statement });
+            modifies.push({ column: col.name, statement, nullCheck: nullDiffers && !wantNull });
             added.modified.push(col.name);
             continue;
           }
@@ -23024,33 +23230,45 @@ var require_schema = __commonJS({
       _readPool() {
         return this.pools.read || this.pools.write;
       }
-      // Record the creator of a table. Best effort: a failure only means
-      // nobody can `modify` that table later.
+      // Record the creator of a table. Best effort: a failure only means the
+      // table stays unowned (pre-ownership modify behaviour).
       async _recordOwner(table, resource) {
         if (!this.ownersTable || !resource) return;
         try {
-          await this.pools.write.query(
+          const [res] = await this.pools.write.query(
             `INSERT IGNORE INTO ${q(this.ownersTable)} (\`table_name\`, \`resource\`) VALUES (?, ?)`,
             [table, resource]
           );
+          if (res && res.affectedRows === 1) {
+            log2.warn("schema", `${resource} now owns table ${table} (only ${resource} may apply \`modify\` to it)`);
+          }
         } catch (err) {
           log2.debug("schema", `could not record the owner of ${table}: ${err.message}`);
         }
       }
-      // True when `resource` owns `table`. A table with no recorded owner (it
-      // predates ownership tracking) is claimed by the first resource that asks.
-      async _owns(table, resource) {
-        if (!this.ownersTable || !resource) return false;
+      // The recorded owner of `table`, or null when it has none (or ownership
+      // cannot be read). Never claims a table.
+      async _ownerOf(table) {
+        if (!this.ownersTable) return null;
         try {
-          await this._recordOwner(table, resource);
           const [rows] = await this.pools.write.query(
             `SELECT \`resource\` FROM ${q(this.ownersTable)} WHERE \`table_name\` = ?`,
             [table]
           );
-          return Array.isArray(rows) && rows.length > 0 && rows[0].resource === resource;
+          return Array.isArray(rows) && rows.length > 0 ? rows[0].resource : null;
         } catch (err) {
           log2.warn("schema", `could not check the owner of ${table}: ${err.message}`);
-          return false;
+          return null;
+        }
+      }
+      // True when `column` of `table` holds at least one NULL (or the check fails).
+      async _hasNulls(table, column) {
+        try {
+          const [rows] = await this.pools.write.query(`SELECT 1 FROM ${q(table)} WHERE ${q(column)} IS NULL LIMIT 1`);
+          return !Array.isArray(rows) || rows.length > 0;
+        } catch (err) {
+          log2.warn("schema", `could not check ${table}.${column} for NULLs: ${err.message}`);
+          return true;
         }
       }
       // Serialise work per table so two resources racing on the same table do not interleave DDL.
@@ -23101,13 +23319,28 @@ var require_schema = __commonJS({
             await this._recordOwner(spec.name, resource);
           } else {
             const result = diff(spec, actual, { allowModify: this.allowModify });
-            if (result.modifies.length > 0 && !await this._owns(spec.name, resource)) {
-              const withheld = new Set(result.modifies.map((m) => m.statement));
-              result.statements = result.statements.filter((s) => !withheld.has(s));
+            const who = resource || "unknown";
+            for (const w of result.warnings) {
+              if (/modify refused/.test(w)) log2.warn("schema", `${who}: ${w}`);
+            }
+            if (result.modifies.length > 0) {
+              const owner = await this._ownerOf(spec.name);
+              const withheld = /* @__PURE__ */ new Set();
+              const refuse = /* @__PURE__ */ __name((m, why) => {
+                withheld.add(m.statement);
+                const w = `${spec.name}.${m.column}: modify refused (${why}) (not altered)`;
+                result.warnings.push(w);
+                log2.warn("schema", `${who}: ${w}`);
+              }, "refuse");
               for (const m of result.modifies) {
-                result.warnings.push(`${spec.name}.${m.column}: modify refused (${resource || "the caller"} does not own ${spec.name}) (not altered)`);
+                if (owner && owner !== resource) refuse(m, `${who} does not own ${spec.name}; its owner is ${owner}`);
+                else if (m.nullCheck && await this._hasNulls(spec.name, m.column)) refuse(m, "NULL to NOT NULL while the column still holds NULLs");
+                else if (!owner) log2.warn("schema", `${who}: applying modify to ${spec.name}.${m.column}; ${spec.name} has no recorded owner`);
               }
-              result.added.modified = [];
+              if (withheld.size) {
+                result.statements = result.statements.filter((st) => !withheld.has(st));
+                result.added.modified = result.modifies.filter((m) => !withheld.has(m.statement)).map((m) => m.column);
+              }
             }
             for (const stmt of result.statements) await this.pools.write.query(ddl(stmt));
             report.added_columns = result.added.columns;
@@ -23201,6 +23434,7 @@ var require_exports = __commonJS({
       __name(verifiedCaller, "verifiedCaller");
       const PRE_READY_ENQUEUE_LIMIT = 1e5;
       let preReadyEnqueues = 0;
+      let preReadyDropped = 0;
       function dataExport(name, impl) {
         const exported = /* @__PURE__ */ __name(function(...args) {
           let cb = null, resource = null;
@@ -23262,11 +23496,19 @@ var require_exports = __commonJS({
           return;
         }
         if (preReadyEnqueues >= PRE_READY_ENQUEUE_LIMIT) {
-          throw new Error(`qbsql: ${name} refused: ${PRE_READY_ENQUEUE_LIMIT} writes are already waiting for the database to become ready`);
+          preReadyDropped++;
+          if (preReadyDropped === 1) {
+            log2.error("exports", `qbsql: ${name} dropped: ${PRE_READY_ENQUEUE_LIMIT} writes are already waiting for the database to become ready`);
+          }
+          return;
         }
         preReadyEnqueues++;
         api2.ready().then(impl).catch((err) => log2.error("exports", `${name} failed before qbsql became ready: ${err.message}`)).finally(() => {
           preReadyEnqueues--;
+          if (preReadyEnqueues === 0 && preReadyDropped > 0) {
+            log2.error("exports", `qbsql: ${preReadyDropped} fire-and-forget write(s) were dropped while waiting for the database`);
+            preReadyDropped = 0;
+          }
         });
       }
       __name(enqueueWhenReady, "enqueueWhenReady");
@@ -23344,14 +23586,30 @@ var require_exports = __commonJS({
       }, "startTransaction");
       exports3("startTransaction", startTransaction);
       provideForeign("oxmysql", "startTransaction_async", startTransaction);
+      function safeEnqueue(name, impl) {
+        try {
+          enqueueWhenReady(name, () => {
+            try {
+              impl();
+            } catch (err) {
+              log2.error("exports", `${name} failed: ${err && err.message}`);
+            }
+          });
+        } catch (err) {
+          log2.error("exports", `${name} failed: ${err && err.message}`);
+        }
+      }
+      __name(safeEnqueue, "safeEnqueue");
       exports3("enqueue", (table, key, row, opts2) => {
-        enqueueWhenReady("enqueue", () => api2.queue.enqueue(table, key, row, opts2));
+        const resource = verifiedCaller(null);
+        safeEnqueue("enqueue", () => api2.queue.enqueue(table, key, row, opts2, resource));
       });
       exports3("enqueueMany", (table, key, rows, opts2) => {
-        enqueueWhenReady("enqueueMany", () => api2.queue.enqueueMany(table, key, rows, opts2));
+        const resource = verifiedCaller(null);
+        safeEnqueue("enqueueMany", () => api2.queue.enqueueMany(table, key, rows, opts2, resource));
       });
       dataExport("upsert", (table, key, rows, opts2, resource) => {
-        api2.queue.enqueueMany(table, key, rows, Object.assign({}, opts2, { priority: "normal" }));
+        api2.queue.enqueueMany(table, key, rows, Object.assign({}, opts2, { priority: "normal", strict: true }), resource);
         return api2.queue.flush(table).then(() => rows.length);
       });
       exports3("flush", function(table, cb) {

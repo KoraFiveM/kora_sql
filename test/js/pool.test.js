@@ -63,3 +63,21 @@ test('S6: read connections get a server-side limit in the right dialect', () => 
     assert.equal(sessionTimeoutSql({ _isMariaDB: false }, 30000), 'SET SESSION max_execution_time = 30000');
     assert.equal(sessionTimeoutSql({ _isMariaDB: true }, 30000), 'SET SESSION max_statement_time = 30.000');
 });
+
+test('M4: an unknown session variable retries once with the other dialect', () => {
+    const { limitReadStatements } = require('../../server/js/pool.js');
+    let onConnection;
+    limitReadStatements({ on: (_ev, fn) => { onConnection = fn; } }, 30000);
+    const sent = [];
+    const conn = {
+        _isMariaDB: false,
+        query(sql, cb) {
+            sent.push(sql);
+            if (/max_execution_time/.test(sql)) cb(Object.assign(new Error('Unknown system variable'), { code: 'ER_UNKNOWN_SYSTEM_VARIABLE', errno: 1193 }));
+            else cb(null);
+        },
+    };
+    onConnection(conn);
+    assert.deepEqual(sent, ['SET SESSION max_execution_time = 30000', 'SET SESSION max_statement_time = 30.000']);
+    assert.equal(sessionTimeoutSql({ _handshakePacket: { serverVersion: '5.5.5-10.11.6-MariaDB' } }, 1000), 'SET SESSION max_statement_time = 1.000');
+});

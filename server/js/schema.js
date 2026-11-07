@@ -1,11 +1,14 @@
 // Declarative table setup. A resource describes a table as data (columns, keys,
 // foreign keys, seed rows); this module creates it if missing and, when it exists,
 // ADDS whatever is missing. It never drops anything, and never alters an
-// existing column unless that column opts in with `modify = true`, the change
-// only WIDENS it (no data can be truncated or rejected), and the calling
-// resource owns the table (recorded in kora_sql_schema_owners when it created
-// the table, or claimed by the first resource that modifies a pre-existing
-// one). Everything else is reported as a warning only.
+// existing column unless that column opts in with `modify = true` and the
+// change cannot lose data: it WIDENS the type (see isWidening), or tightens
+// NULL to NOT NULL on a column that holds no NULLs. A table with a recorded
+// owner (kora_sql_schema_owners, written when ensureTable created it) is only
+// modified by that owner; a table with no recorded owner (it predates
+// ownership tracking) keeps the pre-ownership behaviour -- any resource's safe
+// modify applies -- and is never claimed by a modify. Every refused or
+// unowned modify is logged at warn, naming the resource.
 //
 // Everything interpolated into DDL is validated first (identifiers, types,
 // keywords). Values (seed rows) are always bound parameters; column DEFAULTs
@@ -166,6 +169,8 @@ function typeMatches(want, got) {
 }
 
 const INT_RANK = { tinyint: 1, smallint: 2, mediumint: 3, int: 4, bigint: 5 };
+// Decimal digits needed for every value of each integer type.
+const INT_DIGITS = { tinyint: 3, smallint: 5, mediumint: 8, int: 10, bigint: 20 };
 const TEXT_RANK = { tinytext: 1, text: 2, mediumtext: 3, longtext: 4 };
 const BLOB_RANK = { tinyblob: 1, blob: 2, mediumblob: 3, longblob: 4 };
 
@@ -196,8 +201,24 @@ function isWidening(got, want) {
     if (got === want) return true;
     const a = parseColumnType(got);
     const b = parseColumnType(want);
-    if (!a || !b || a.zerofill !== b.zerofill || a.unsigned !== b.unsigned) return false;
+    if (!a || !b || a.zerofill !== b.zerofill) return false;
+    // An unsigned integer fits a strictly larger signed one (int unsigned -> bigint).
+    if (a.name in INT_RANK && b.name in INT_RANK && a.unsigned && !b.unsigned) return INT_RANK[b.name] > INT_RANK[a.name];
+    // An integer fits a decimal with enough integer digits (and the sign rule above).
+    if (a.name in INT_RANK && ['decimal', 'numeric'].includes(b.name) && (b.unsigned === a.unsigned || !b.unsigned)) {
+        const [bp, bs = 0] = String(b.args || '10,0').split(',').map(Number);
+        return bp - bs >= INT_DIGITS[a.name];
+    }
+    if (a.unsigned !== b.unsigned) return false;
     if (a.name in INT_RANK && b.name in INT_RANK) return INT_RANK[b.name] >= INT_RANK[a.name];
+    // A string column fits TEXT (65535 bytes >= any varchar's byte length);
+    // TINYTEXT only when even 4-byte characters fit its 255 bytes.
+    if ((a.name === 'char' || a.name === 'varchar') && b.name in TEXT_RANK) {
+        return TEXT_RANK[b.name] >= 2 || Number(a.args || 1) * 4 <= 255;
+    }
+    if ((a.name === 'binary' || a.name === 'varbinary') && b.name in BLOB_RANK) {
+        return BLOB_RANK[b.name] >= 2 || Number(a.args || 1) <= 255;
+    }
     if (['char', 'varchar', 'binary', 'varbinary'].includes(a.name)) {
         const sameFamily = a.name === b.name
             || (a.name === 'char' && b.name === 'varchar') || (a.name === 'binary' && b.name === 'varbinary');
@@ -297,12 +318,13 @@ function diff(spec, actual, opts = {}) {
             const refused = !allowModify ? 'modify is disabled by kora_sql_schema_allow_modify'
                 : spec.extend ? 'an extend table never modifies existing columns'
                     : typeDiffers && !isWidening(got, want) ? 'only widening type changes are applied'
-                        : nullDiffers && !wantNull ? 'NULL to NOT NULL is not applied'
-                            : null;
+                        : null;
             if (!refused) {
                 const statement = alter(`MODIFY COLUMN ${columnDefinition(col, spec)}`);
                 statements.push(statement);
-                modifies.push({ column: col.name, statement });
+                // NULL -> NOT NULL is safe only once no NULLs remain (checked
+                // by SchemaManager before the statement runs).
+                modifies.push({ column: col.name, statement, nullCheck: nullDiffers && !wantNull });
                 added.modified.push(col.name);
                 continue;
             }
@@ -386,30 +408,43 @@ class SchemaManager {
         return this.pools.read || this.pools.write;
     }
 
-    // Record the creator of a table. Best effort: a failure only means
-    // nobody can `modify` that table later.
+    // Record the creator of a table. Best effort: a failure only means the
+    // table stays unowned (pre-ownership modify behaviour).
     async _recordOwner(table, resource) {
         if (!this.ownersTable || !resource) return;
         try {
-            await this.pools.write.query(
+            const [res] = await this.pools.write.query(
                 `INSERT IGNORE INTO ${q(this.ownersTable)} (\`table_name\`, \`resource\`) VALUES (?, ?)`, [table, resource]);
+            if (res && res.affectedRows === 1) {
+                log.warn('schema', `${resource} now owns table ${table} (only ${resource} may apply \`modify\` to it)`);
+            }
         } catch (err) {
             log.debug('schema', `could not record the owner of ${table}: ${err.message}`);
         }
     }
 
-    // True when `resource` owns `table`. A table with no recorded owner (it
-    // predates ownership tracking) is claimed by the first resource that asks.
-    async _owns(table, resource) {
-        if (!this.ownersTable || !resource) return false;
+    // The recorded owner of `table`, or null when it has none (or ownership
+    // cannot be read). Never claims a table.
+    async _ownerOf(table) {
+        if (!this.ownersTable) return null;
         try {
-            await this._recordOwner(table, resource);
             const [rows] = await this.pools.write.query(
                 `SELECT \`resource\` FROM ${q(this.ownersTable)} WHERE \`table_name\` = ?`, [table]);
-            return Array.isArray(rows) && rows.length > 0 && rows[0].resource === resource;
+            return Array.isArray(rows) && rows.length > 0 ? rows[0].resource : null;
         } catch (err) {
             log.warn('schema', `could not check the owner of ${table}: ${err.message}`);
-            return false;
+            return null;
+        }
+    }
+
+    // True when `column` of `table` holds at least one NULL (or the check fails).
+    async _hasNulls(table, column) {
+        try {
+            const [rows] = await this.pools.write.query(`SELECT 1 FROM ${q(table)} WHERE ${q(column)} IS NULL LIMIT 1`);
+            return !Array.isArray(rows) || rows.length > 0;
+        } catch (err) {
+            log.warn('schema', `could not check ${table}.${column} for NULLs: ${err.message}`);
+            return true;
         }
     }
 
@@ -453,14 +488,29 @@ class SchemaManager {
                 await this._recordOwner(spec.name, resource);
             } else {
                 const result = diff(spec, actual, { allowModify: this.allowModify });
-                if (result.modifies.length > 0 && !(await this._owns(spec.name, resource))) {
-                    // Only the owning resource may alter existing columns.
-                    const withheld = new Set(result.modifies.map((m) => m.statement));
-                    result.statements = result.statements.filter((s) => !withheld.has(s));
+                const who = resource || 'unknown';
+                // Refused by diff (convar, extend, narrowing): say so at warn.
+                for (const w of result.warnings) {
+                    if (/modify refused/.test(w)) log.warn('schema', `${who}: ${w}`);
+                }
+                if (result.modifies.length > 0) {
+                    const owner = await this._ownerOf(spec.name);
+                    const withheld = new Set();
+                    const refuse = (m, why) => {
+                        withheld.add(m.statement);
+                        const w = `${spec.name}.${m.column}: modify refused (${why}) (not altered)`;
+                        result.warnings.push(w);
+                        log.warn('schema', `${who}: ${w}`);
+                    };
                     for (const m of result.modifies) {
-                        result.warnings.push(`${spec.name}.${m.column}: modify refused (${resource || 'the caller'} does not own ${spec.name}) (not altered)`);
+                        if (owner && owner !== resource) refuse(m, `${who} does not own ${spec.name}; its owner is ${owner}`);
+                        else if (m.nullCheck && await this._hasNulls(spec.name, m.column)) refuse(m, 'NULL to NOT NULL while the column still holds NULLs');
+                        else if (!owner) log.warn('schema', `${who}: applying modify to ${spec.name}.${m.column}; ${spec.name} has no recorded owner`);
                     }
-                    result.added.modified = [];
+                    if (withheld.size) {
+                        result.statements = result.statements.filter((st) => !withheld.has(st));
+                        result.added.modified = result.modifies.filter((m) => !withheld.has(m.statement)).map((m) => m.column);
+                    }
                 }
                 for (const stmt of result.statements) await this.pools.write.query(ddl(stmt));
                 report.added_columns = result.added.columns;

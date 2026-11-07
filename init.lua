@@ -44,11 +44,48 @@ local function awaitTimeoutMs()
     return nil
 end
 
+-- One shared watchdog thread enforces awaitTimeout for every pending call and
+-- exits as soon as nothing is pending, so an answered call leaves no sleeping
+-- timer coroutine behind (a per-call SetTimeout slept for the full limit).
+local pendingWaits = {}
+local watchdogRunning = false
+local function startWatchdog()
+    if watchdogRunning then return end
+    watchdogRunning = true
+    Citizen.CreateThread(function()
+        while next(pendingWaits) do
+            Wait(100)
+            local now = GetGameTimer()
+            local expired = {}
+            for token, w in pairs(pendingWaits) do
+                if now >= w.deadline then expired[#expired + 1] = token end
+            end
+            for _, token in ipairs(expired) do
+                local w = pendingWaits[token]
+                pendingWaits[token] = nil
+                if w then w.expire() end
+            end
+        end
+        watchdogRunning = false
+    end)
+end
+
+-- Calls that awaitTimeout never cuts short: awaitTables/ensureTable(s) carry
+-- their own (longer) waits, and the awaited write paths must not report
+-- failure while the write may still commit (a caller retrying a timed-out
+-- accumulate upsert would apply it twice).
+local NO_AWAIT_TIMEOUT = {
+    awaitTables = true, ensureTable = true, ensureTables = true,
+    upsert = true, transaction = true, transactionChecked = true,
+    awaitCheckedOperation = true, awaitCheckedOperations = true,
+}
+
 -- Run a JS export that returns a promise, and Await it on this coroutine.
 -- Returns (value, errorString). The JS `dataExport` wrapper returns a promise
 -- when no callback is passed; FiveM marshals its resolution back here.
 local function await(name, ...)
     local args = { ... }
+    local token = {}
     local p = promise.new()
     local settled = false
     -- We pass a Lua callback as the trailing argument; the JS side detects a
@@ -57,6 +94,7 @@ local function await(name, ...)
     args[#args + 1] = function(result, err)
         if settled then return end
         settled = true
+        pendingWaits[token] = nil
         if err then
             p:reject(err)
         else
@@ -67,14 +105,19 @@ local function await(name, ...)
     -- the (nil, err) contract instead of throwing into the caller.
     local called, callErr = pcall(function() driver[name](driver, table.unpack(args)) end)
     if not called then return nil, tostring(callErr) end
-    local limit = awaitTimeoutMs()
-    if limit and not settled and type(SetTimeout) == 'function' then
-        SetTimeout(limit, function()
-            if settled then return end
-            settled = true
-            -- Only the wait ends: a write may still commit after this.
-            p:reject(('qbsql: no reply to %s within %dms; the statement may still complete'):format(name, limit))
-        end)
+    local limit = not NO_AWAIT_TIMEOUT[name] and awaitTimeoutMs() or nil
+    if limit and not settled and type(GetGameTimer) == 'function' and Citizen and type(Citizen.CreateThread) == 'function' then
+        pendingWaits[token] = {
+            deadline = GetGameTimer() + limit,
+            expire = function()
+                if settled then return end
+                settled = true
+                -- Only the wait ends: a write may still commit after this.
+                -- Never retry a timed-out write blindly.
+                p:reject(('qbsql: no reply to %s within %dms; the statement may still complete'):format(name, limit))
+            end,
+        }
+        startWatchdog()
     end
     local ok, res = pcall(Citizen.Await, p)
     if not ok then
@@ -141,8 +184,14 @@ function Kora.sql.stats()               return exports.kora_sql:stats() end
 
 -- The FIRE-AND-FORGET path. These NEVER yield -- they hand rows to the JS queue
 -- and return immediately. This is the hot save path for kora_core's persistence.
-function Kora.sql.enqueue(table_, key, row, opts)      exports.kora_sql:enqueue(table_, key, row, opts) end
-function Kora.sql.enqueueMany(table_, key, rows, opts) exports.kora_sql:enqueueMany(table_, key, rows, opts) end
+-- They never raise into the caller's save loop either: a stopped/restarting
+-- kora_sql (or any driver-side error) is printed and the call returns.
+local function fireAndForget(name, table_, key, rows, opts)
+    local ok, err = pcall(function() exports.kora_sql[name](exports.kora_sql, table_, key, rows, opts) end)
+    if not ok then print(('^3[kora_sql] %s(%s) failed: %s^7'):format(name, tostring(table_), tostring(err))) end
+end
+function Kora.sql.enqueue(table_, key, row, opts)      fireAndForget('enqueue', table_, key, row, opts) end
+function Kora.sql.enqueueMany(table_, key, rows, opts) fireAndForget('enqueueMany', table_, key, rows, opts) end
 
 -- flush yields until the named table (or everything) has been drained.
 function Kora.sql.flush(table_)

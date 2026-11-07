@@ -222,23 +222,27 @@ test('S7: modify only applies widening changes', () => {
         ['varchar(50)', 'varchar(255)'], ['char(10)', 'varchar(10)'], ['int', 'bigint'], ['int unsigned', 'bigint unsigned'],
         ['tinyint(1)', 'int'], ['decimal(10,2)', 'decimal(12,4)'], ['text', 'longtext'], ['blob', 'mediumblob'],
         ["enum('a','b')", "enum('a','b','c')"], ["enum('a','b''c')", "enum('a','b\\'c','d')"], ['float', 'double'], ['datetime', 'datetime(3)'],
+        // M6: transitions that cannot lose data and that worked before ownership/widening rules.
+        ['varchar(50)', 'text'], ['varchar(255)', 'longtext'], ['varchar(50)', 'tinytext'], ['varbinary(100)', 'blob'],
+        ['int unsigned', 'bigint'], ['int', 'decimal(12,2)'], ['int unsigned', 'decimal(10,0)'],
     ]) assert.equal(isWidening(got, want), true, `${got} -> ${want}`);
     for (const [got, want] of [
         ['varchar(255)', 'varchar(16)'], ['bigint', 'int'], ['int', 'int unsigned'], ['int unsigned', 'int'],
         ['decimal(12,4)', 'decimal(10,2)'], ['decimal(10,2)', 'decimal(10,4)'], ['longtext', 'text'], ['varchar(50)', 'int'],
-        ["enum('a','b','c')", "enum('a','b')"], ['varchar(50)', 'text'], ['double', 'float'], ['datetime(3)', 'datetime'],
+        ["enum('a','b','c')", "enum('a','b')"], ['double', 'float'], ['datetime(3)', 'datetime'],
+        ['varchar(100)', 'tinytext'], ['int unsigned', 'int'], ['int', 'decimal(10,2)'], ['int', 'decimal(12,2) unsigned'],
     ]) assert.equal(isWidening(got, want), false, `${got} -> ${want}`);
 });
 
-test('S7: narrowing, NOT NULL tightening, extend tables and the convar all refuse modify', () => {
+test('S7: narrowing, extend tables and the convar refuse modify; NOT NULL tightening needs a NULL check', () => {
     const actual = { columns: [{ COLUMN_NAME: 'name', COLUMN_TYPE: 'varchar(255)', IS_NULLABLE: 'YES' }], indexes: [], foreign: [], checks: [] };
     const spec = (col, extra = {}) => validateSpec({ name: 'players', columns: [{ name: 'name', modify: true, ...col }], ...extra });
     const shrink = diff(spec({ type: 'varchar(16)', null: true }), actual);
     assert.deepEqual(shrink.statements, []);
     assert.match(shrink.warnings[0], /modify refused \(only widening type changes are applied\)/);
+    // NULL -> NOT NULL is applied only after the manager finds no NULLs.
     const tighten = diff(spec({ type: 'varchar(255)' }), actual);
-    assert.deepEqual(tighten.statements, []);
-    assert.match(tighten.warnings[0], /NULL to NOT NULL/);
+    assert.deepEqual(tighten.modifies.map((m) => [m.column, m.nullCheck]), [['name', true]]);
     const extend = diff(spec({ type: 'varchar(500)', null: true }, { extend: true }), actual);
     assert.deepEqual(extend.statements, []);
     assert.match(extend.warnings[0], /extend table never modifies/);
@@ -270,30 +274,68 @@ function ownedPools({ owner = null, columnType = 'varchar(50)' } = {}) {
     return { executed, owners, pools: { read: { query }, write: { query } } };
 }
 
-test('S7: only the owning resource may modify; an unowned legacy table is claimed by its first modifier', async () => {
+test('S7/M5: only the owner may modify an owned table; an unowned table keeps the old behaviour and is never claimed', async () => {
     const spec = { name: 'demo', columns: [{ name: 'name', type: 'varchar(100)', modify: true }] };
     const opts = { ownersTable: 'kora_sql_schema_owners' };
+    const log = require('../../server/js/logger.js');
+    const warnings = [];
+    const warn = log.warn;
+    log.warn = (_tag, m) => warnings.push(m);
+    try {
+        const foreign = ownedPools({ owner: 'owner_res' });
+        const refused = await new SchemaManager(foreign.pools, opts).ensureTable(spec, 'other_res');
+        assert.deepEqual(refused.modified_columns, []);
+        assert.match(refused.warnings.join('\n'), /other_res does not own demo; its owner is owner_res/);
+        assert.ok(!foreign.executed.some((e) => /MODIFY COLUMN/.test(e.text)));
+        assert.ok(warnings.some((m) => /^other_res: demo\.name: modify refused/.test(m)), 'refusal is logged at warn naming the resource');
 
-    const foreign = ownedPools({ owner: 'owner_res' });
-    const refused = await new SchemaManager(foreign.pools, opts).ensureTable(spec, 'other_res');
-    assert.deepEqual(refused.modified_columns, []);
-    assert.match(refused.warnings.join('\n'), /other_res does not own demo/);
-    assert.ok(!foreign.executed.some((e) => /MODIFY COLUMN/.test(e.text)));
+        const own = ownedPools({ owner: 'owner_res' });
+        const applied = await new SchemaManager(own.pools, opts).ensureTable(spec, 'owner_res');
+        assert.deepEqual(applied.modified_columns, ['name']);
+        assert.ok(own.executed.some((e) => /^ALTER TABLE `demo` MODIFY COLUMN `name` varchar\(100\)/.test(e.text)));
 
-    const own = ownedPools({ owner: 'owner_res' });
-    const applied = await new SchemaManager(own.pools, opts).ensureTable(spec, 'owner_res');
-    assert.deepEqual(applied.modified_columns, ['name']);
-    assert.ok(own.executed.some((e) => /^ALTER TABLE `demo` MODIFY COLUMN `name` varchar\(100\)/.test(e.text)));
+        warnings.length = 0;
+        const legacy = ownedPools();
+        const first = await new SchemaManager(legacy.pools, opts).ensureTable(spec, 'first_res');
+        assert.deepEqual(first.modified_columns, ['name']);
+        assert.equal(legacy.owners.has('demo'), false, 'a modify never claims a table');
+        assert.ok(warnings.some((m) => /first_res: applying modify to demo\.name; demo has no recorded owner/.test(m)));
+        const second = await new SchemaManager(legacy.pools, opts).ensureTable(spec, 'second_res');
+        assert.deepEqual(second.modified_columns, ['name']);
 
-    const legacy = ownedPools();
-    await new SchemaManager(legacy.pools, opts).ensureTable(spec, 'first_res');
-    assert.equal(legacy.owners.get('demo'), 'first_res');
-    const second = await new SchemaManager(legacy.pools, opts).ensureTable(spec, 'second_res');
-    assert.match(second.warnings.join('\n'), /second_res does not own demo/);
+        // Without an owners table every table is unowned: the pre-ownership behaviour.
+        const anonymous = ownedPools({ owner: 'owner_res' });
+        assert.deepEqual((await new SchemaManager(anonymous.pools).ensureTable(spec, 'x')).modified_columns, ['name']);
+    } finally {
+        log.warn = warn;
+    }
+});
 
-    // Without an owners table (or a caller identity) nobody can modify.
-    const anonymous = ownedPools({ owner: 'owner_res' });
-    assert.deepEqual((await new SchemaManager(anonymous.pools).ensureTable(spec, 'owner_res')).modified_columns, []);
+test('M6: NULL -> NOT NULL applies once the column holds no NULLs, and is refused (logged) while it does', async () => {
+    const spec = { name: 'demo', columns: [{ name: 'name', type: 'varchar(50)', modify: true }] };
+    for (const hasNull of [false, true]) {
+        const executed = [];
+        const query = async (sql) => {
+            const text = typeof sql === 'string' ? sql : sql.sql;
+            executed.push(text);
+            if (text.includes('information_schema.TABLES')) return [[{ 1: 1 }], []];
+            if (text.includes('information_schema.COLUMNS')) return [[{ COLUMN_NAME: 'name', COLUMN_TYPE: 'varchar(50)', IS_NULLABLE: 'YES' }], []];
+            if (text.includes('information_schema')) return [[], []];
+            if (/IS NULL LIMIT 1/.test(text)) return [hasNull ? [{ 1: 1 }] : [], []];
+            return [{ affectedRows: 0 }, []];
+        };
+        const log = require('../../server/js/logger.js');
+        const warn = log.warn;
+        log.warn = () => {};
+        try {
+            const report = await new SchemaManager({ read: { query }, write: { query } }).ensureTable(spec, 'res');
+            assert.deepEqual(report.modified_columns, hasNull ? [] : ['name']);
+            assert.equal(executed.some((t) => /MODIFY COLUMN `name` varchar\(50\) NOT NULL/.test(t)), !hasNull);
+            if (hasNull) assert.match(report.warnings.join('\n'), /still holds NULLs/);
+        } finally {
+            log.warn = warn;
+        }
+    }
 });
 
 test('S7: creating a table records its owner; inspection runs on the read pool', async () => {

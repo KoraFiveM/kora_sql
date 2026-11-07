@@ -126,24 +126,42 @@ function withAcquireTimeout(pool, ms, name) {
 // Server-side statement limit for READ connections, so a slow SELECT stops on
 // the server rather than holding a read connection after its caller gave up.
 // MySQL's max_execution_time applies to read-only SELECTs (ms); MariaDB's
-// max_statement_time is in seconds.
-function sessionTimeoutSql(conn, ms) {
-    return conn._isMariaDB
+// max_statement_time is in seconds. mysql2 sets `_isMariaDB` on every
+// connection from the handshake's server version string (checked against
+// mysql2 3.24.2); the regex on `serverVersion` is a fallback if a future
+// mysql2 drops the private flag. If the server still rejects the variable,
+// limitReadStatements retries once with the other dialect.
+function isMariaConnection(conn) {
+    if (typeof conn._isMariaDB === 'boolean') return conn._isMariaDB;
+    const version = conn._handshakePacket && conn._handshakePacket.serverVersion;
+    return typeof version === 'string' && /mariadb/i.test(version);
+}
+
+function sessionTimeoutSql(conn, ms, mariadb = isMariaConnection(conn)) {
+    return mariadb
         ? `SET SESSION max_statement_time = ${(ms / 1000).toFixed(3)}`
         : `SET SESSION max_execution_time = ${Math.floor(ms)}`;
 }
 
+const UNKNOWN_VARIABLE = new Set(['ER_UNKNOWN_SYSTEM_VARIABLE', 'ER_UNKNOWN_SYSTEM_VARIABLE_NAME']);
+
 function limitReadStatements(pool, ms) {
     if (!ms) return;
     let warned = false;
+    const warn = (err) => {
+        if (warned) return;
+        warned = true;
+        log.warn('pool', `could not set a server-side read timeout (${err.message}); only the client-side timeout applies`);
+    };
     pool.on('connection', (conn) => {
         // A callback is required: a callback-less core query with no 'error'
         // listener would throw on failure (e.g. a server without the variable).
-        conn.query(sessionTimeoutSql(conn, ms), (err) => {
-            if (err && !warned) {
-                warned = true;
-                log.warn('pool', `could not set a server-side read timeout (${err.message}); only the client-side timeout applies`);
-            }
+        const mariadb = isMariaConnection(conn);
+        conn.query(sessionTimeoutSql(conn, ms, mariadb), (err) => {
+            if (!err) return;
+            if (!UNKNOWN_VARIABLE.has(err.code) && err.errno !== 1193) { warn(err); return; }
+            // Misdetected server flavour: try the other variable once.
+            conn.query(sessionTimeoutSql(conn, ms, !mariadb), (err2) => { if (err2) warn(err2); });
         });
     });
 }
@@ -194,4 +212,4 @@ function all(pools) {
     return [pools.read, pools.write, pools.flush].filter(Boolean);
 }
 
-module.exports = { build, all, poolOptions, withAcquireTimeout, sessionTimeoutSql };
+module.exports = { build, all, poolOptions, withAcquireTimeout, sessionTimeoutSql, limitReadStatements };

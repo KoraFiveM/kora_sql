@@ -1,5 +1,7 @@
 'use strict';
 
+const log = require('./logger');
+
 // Reviewed stock reads only. Native housing remains the sole write authority;
 // the original stock tables are an import archive, not a second live database.
 function stockRead(sql, params) {
@@ -49,6 +51,7 @@ function touchesStockTables(sql) {
 
 function createLegacyHousingBridge({ getState, request, onStop }) {
     const pending = new Set();
+    const routed = new Set();
     let selected = false;
     onStop((name) => {
         if (name !== 'kora_housing' && name !== 'kora_sql') return;
@@ -66,6 +69,13 @@ function createLegacyHousingBridge({ getState, request, onStop }) {
         if (state === 'started' || state === 'starting') selected = true;
         else if (!selected) return null;
         else return Promise.reject(new Error('Native housing stopped; stock tables are archival'));
+        // One log per calling resource, so a query that merely mentions a stock
+        // table name (a column or alias) is easy to trace to its caller.
+        const who = resource || 'unknown';
+        if (!routed.has(who) && routed.size < 256) {
+            routed.add(who);
+            log.info('housing', `${who}: SQL mentioning houselocations/player_houses is routed to native housing: ${String(sql).slice(0, 160)}`);
+        }
         const read = stockRead(sql, params);
         if (!read) return Promise.reject(new Error('Unsupported stock housing SQL while native housing owns these records'));
         return new Promise((resolve, reject) => {

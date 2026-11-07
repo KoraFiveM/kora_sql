@@ -76,6 +76,7 @@ function register(api, exports, opts = {}) {
     // cannot grow memory without bound.
     const PRE_READY_ENQUEUE_LIMIT = 100000;
     let preReadyEnqueues = 0;
+    let preReadyDropped = 0;
     // A data call: (sql, params, [cb], [resource]) in any trailing combination.
     function dataExport(name, impl) {
         const exported = function (...args) {
@@ -162,13 +163,25 @@ function register(api, exports, opts = {}) {
             return;
         }
         if (preReadyEnqueues >= PRE_READY_ENQUEUE_LIMIT) {
-            throw new Error(`qbsql: ${name} refused: ${PRE_READY_ENQUEUE_LIMIT} writes are already waiting for the database to become ready`);
+            // Never throw into a fire-and-forget caller: drop and log (once
+            // per overflow episode) instead.
+            preReadyDropped++;
+            if (preReadyDropped === 1) {
+                log.error('exports', `qbsql: ${name} dropped: ${PRE_READY_ENQUEUE_LIMIT} writes are already waiting for the database to become ready`);
+            }
+            return;
         }
         preReadyEnqueues++;
         api.ready()
             .then(impl)
             .catch((err) => log.error('exports', `${name} failed before qbsql became ready: ${err.message}`))
-            .finally(() => { preReadyEnqueues--; });
+            .finally(() => {
+                preReadyEnqueues--;
+                if (preReadyEnqueues === 0 && preReadyDropped > 0) {
+                    log.error('exports', `qbsql: ${preReadyDropped} fire-and-forget write(s) were dropped while waiting for the database`);
+                    preReadyDropped = 0;
+                }
+            });
     }
 
     const isReady = () => api.isReady();
@@ -263,16 +276,32 @@ function register(api, exports, opts = {}) {
     exports('startTransaction', startTransaction);
     provideForeign('oxmysql', 'startTransaction_async', startTransaction);
 
+    // Fire-and-forget: never throws into the caller, before or after ready.
+    // Invalid rows are dropped and logged by the queue (once per resource and
+    // reason); valid rows in the same call are still queued.
+    function safeEnqueue(name, impl) {
+        try {
+            enqueueWhenReady(name, () => {
+                try { impl(); } catch (err) { log.error('exports', `${name} failed: ${err && err.message}`); }
+            });
+        } catch (err) {
+            log.error('exports', `${name} failed: ${err && err.message}`);
+        }
+    }
     exports('enqueue', (table, key, row, opts) => {
-        enqueueWhenReady('enqueue', () => api.queue.enqueue(table, key, row, opts));
+        const resource = verifiedCaller(null);
+        safeEnqueue('enqueue', () => api.queue.enqueue(table, key, row, opts, resource));
     });
     exports('enqueueMany', (table, key, rows, opts) => {
-        enqueueWhenReady('enqueueMany', () => api.queue.enqueueMany(table, key, rows, opts));
+        const resource = verifiedCaller(null);
+        safeEnqueue('enqueueMany', () => api.queue.enqueueMany(table, key, rows, opts, resource));
     });
     dataExport('upsert', (table, key, rows, opts, resource) => {
         // Immediate awaited batched upsert -- same builder as the queue, but
         // flushed now and its result returned.
-        api.queue.enqueueMany(table, key, rows, Object.assign({}, opts, { priority: 'normal' }));
+        // strict: an awaited call reports invalid input as an error (as it
+        // always has) instead of silently dropping rows.
+        api.queue.enqueueMany(table, key, rows, Object.assign({}, opts, { priority: 'normal', strict: true }), resource);
         return api.queue.flush(table).then(() => rows.length);
     });
     exports('flush', function (table, cb) {

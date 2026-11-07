@@ -131,3 +131,24 @@ test('oxmysql prepare returns every row of a multi-row SELECT, not only the firs
     const empty = harness([[]]);
     assert.equal(await empty.executor.prepare('SELECT citizenid FROM players WHERE job = ?', ['none']), null);
 });
+
+test('L1: the executor text fallback JSON-encodes plain-object binds; Dates/Buffers/arrays are untouched', async () => {
+    const { executor, calls, protocols } = harness([{ affectedRows: 1 }]);
+    executor.statements.isPreparable = () => false;
+    const when = new Date(0);
+    const buf = Buffer.from('x');
+    await executor.execute('UPDATE t SET meta = ?, at = ?, b = ? WHERE id IN (?)', [{ a: { b: 1 } }, when, buf, [1, 2]]);
+    assert.deepEqual(protocols, ['query']);
+    assert.deepEqual(calls[0][1], ['{"a":{"b":1}}', when, buf, [1, 2]]);
+});
+
+test('L1/H1: needsTextProtocol and textParams helpers', () => {
+    const { needsTextProtocol, textParams } = require('../../server/js/execute');
+    assert.equal(needsTextProtocol([1, 'a', null]), false);
+    assert.equal(needsTextProtocol([[1, 2]]), true);
+    assert.equal(needsTextProtocol([{ a: 1 }]), true);
+    assert.equal(needsTextProtocol({ ids: [1] }), true);
+    assert.equal(needsTextProtocol({ id: 1 }), false);
+    assert.equal(needsTextProtocol([Buffer.from('x'), new Date()]), false);
+    assert.deepEqual(textParams({ meta: { a: 1 }, id: 2 }), { meta: '{"a":1}', id: 2 });
+});

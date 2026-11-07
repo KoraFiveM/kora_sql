@@ -124,22 +124,57 @@ test('S5: the trailing resource is trusted only from kora_sql itself; others are
     assert.deepEqual(seen, ['real_consumer', 'spoofer', 'spoofer', 'internal']);
 });
 
-test('S6: fire-and-forget enqueues retained before readiness are bounded', async () => {
+test('S6: fire-and-forget enqueues retained before readiness are bounded (dropped and logged, never thrown)', async () => {
     const gate = deferred();
     const { api, registered } = harness(gate);
-    let thrown = null;
-    let accepted = 0;
-    for (let i = 0; i < 100001 && !thrown; i++) {
-        try { registered.enqueue('players', 'citizenid', { pk: `P${i}`, cols: { v: i } }, {}); accepted++; } catch (err) { thrown = err; }
+    const log = require('../../server/js/logger.js');
+    const errors = [];
+    const error = log.error;
+    log.error = (_tag, m) => errors.push(m);
+    try {
+        for (let i = 0; i < 100005; i++) {
+            assert.doesNotThrow(() => registered.enqueue('players', 'citizenid', { pk: `P${i}`, cols: { v: i } }, {}));
+        }
+        assert.equal(errors.length, 1, 'one log for the overflow, not one per call');
+        assert.match(errors[0], /100000 writes are already waiting/);
+        let drained = 0;
+        api.queue = { enqueue: () => { drained++; } };
+        gate.resolve(true);
+        await gate.promise;
+        await new Promise((resolve) => setImmediate(resolve));
+        assert.equal(drained, 100000, 'every accepted write is still delivered');
+        assert.ok(errors.some((m) => /5 fire-and-forget write\(s\) were dropped/.test(m)));
+    } finally {
+        log.error = error;
     }
-    assert.equal(accepted, 100000);
-    assert.match(thrown && thrown.message, /100000 writes are already waiting/);
-    let drained = 0;
-    api.queue = { enqueue: () => { drained++; } };
-    gate.resolve(true);
-    await gate.promise;
-    await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(drained, 100000, 'every accepted write is still delivered');
+});
+
+test('H2: enqueue/enqueueMany never throw into the caller, before or after ready', async () => {
+    const gate = deferred();
+    const { api, registered } = harness(gate);
+    const log = require('../../server/js/logger.js');
+    const errors = [];
+    const error = log.error;
+    log.error = (_tag, m) => errors.push(m);
+    try {
+        api.queue = {
+            enqueue: () => { throw new Error('boom-enqueue'); },
+            enqueueMany: () => { throw new Error('boom-many'); },
+        };
+        // Before ready: retained, then the failure is logged.
+        assert.doesNotThrow(() => registered.enqueueMany('players', 'citizenid', [{ pk: null }], {}));
+        gate.resolve(true);
+        await gate.promise;
+        await new Promise((resolve) => setImmediate(resolve));
+        // After ready: the same input behaves the same way.
+        api.isReady = () => true;
+        assert.doesNotThrow(() => registered.enqueueMany('players', 'citizenid', [{ pk: null }], {}));
+        assert.doesNotThrow(() => registered.enqueue('players', 'citizenid', { pk: null }, {}));
+        assert.equal(errors.filter((m) => /boom-many/.test(m)).length, 2);
+        assert.equal(errors.filter((m) => /boom-enqueue/.test(m)).length, 1);
+    } finally {
+        log.error = error;
+    }
 });
 
 test('oxmysql async aliases are genuine JS promise exports', async () => {

@@ -45,11 +45,12 @@ set mysql_connection_string "mysql://user:pass@db.example.com/qbcore?charset=utf
 ```
 - `ssl` is oxmysql's form: a JSON object of mysql2/Node TLS options (`ca`,
   `rejectUnauthorized`, ...) or `true` (TLS with certificate verification) /
-  `false`. An unparseable value stops the driver from starting rather than
-  connecting in plaintext.
+  `false`. Any other value (`ssl=preferred`, broken JSON) is ignored with a
+  warning and the connection is **unencrypted**; it never stops boot.
 - `sslmode=require` encrypts without verifying the certificate;
   `verify-ca`/`verify-full` verify it; `disable`/`none` are plaintext.
-  `preferred` is not supported by mysql2 and connects **unencrypted** with a warning.
+  `preferred` is not supported by mysql2 and connects **unencrypted** with a warning,
+  as does any unknown `sslmode` value.
 - `connectTimeout` (ms) bounds opening a new connection (default 10000).
 
 The semicolon form accepts the same keys. Any other option (for example
@@ -66,7 +67,8 @@ waiting longer than `kora_sql_acquire_timeout` for a free connection fails with
 `QBSQL_ACQUIRE_TIMEOUT` without having run. When more than
 `kora_sql_pool_queue_limit` callers are already waiting, new calls fail at once
 with `Queue limit reached.`. Before the database is first reachable, at most
-100000 fire-and-forget `enqueue` calls are held; further calls throw.
+100000 fire-and-forget `enqueue` calls are held; further calls are dropped
+and logged (they never raise into the caller).
 
 Source contributors run `yarn install` and `yarn build` after changing the JS
 driver or its dependencies. Those development dependencies are not needed by
@@ -96,8 +98,12 @@ The yielding calls below wait for the driver's answer. If the **calling
 resource's** own `Config.sql.awaitTimeout` is a positive number of
 milliseconds, a call that has no answer by then returns `nil, errString`
 instead. Only the wait ends: the statement keeps running, so a write may still
-commit. Unset (the default for every consumer) means wait for the answer; reads
-are bounded by `kora_sql_query_timeout` regardless.
+commit, so **never retry a timed-out write blindly**. Unset (the default for
+every consumer) means wait for the answer; reads are bounded by
+`kora_sql_query_timeout` regardless. The limit never applies to
+`awaitTables`/`ensureTable`/`ensureTables` (they have their own waits) nor to
+`upsert`, `transaction`, `transactionChecked` and the checked-operation waits,
+whose result must not be guessed while they may still commit.
 
 ### Kora.sql.query(sql, params) -> rows[] | nil, errString
 Yields. Returns an array of row tables.
@@ -175,9 +181,12 @@ rows** — this is the hot save path.
   Use it when `cols` is built from data a client sent, so a client cannot add
   columns such as `money` to the write.
 
-Validation happens when you call `enqueue`/`enqueueMany`/`upsert`, which then
-**raise an error and queue nothing** (for `enqueueMany`, a single bad row
-rejects the whole call):
+Validation happens when you call `enqueue`/`enqueueMany`/`upsert`.
+`enqueue`/`enqueueMany` **never raise**: an invalid row is dropped and logged
+once per (calling resource, reason), and every valid row in the same call is
+still queued, before and after the driver is ready (so one player whose key is
+not loaded yet cannot cost the whole batched save). `upsert` is awaited, so it
+stays all-or-nothing and returns `nil, errString` for invalid input. The rules:
 - the table, every conflict-key column and every `cols` key must be plain
   identifiers (`[A-Za-z0-9_]`, 1-64 characters), so `players.money` is refused;
 - `cols` must not be empty and must not contain a conflict-key column;
@@ -187,13 +196,21 @@ rejects the whole call):
 Rows are written in primary-key order so concurrent flushes lock rows in the
 same order. A write that fails with an error retrying cannot fix (unknown
 column, value too long, NULL in a NOT NULL column, constraint violation) is not
-retried: the batch is split until only the offending rows remain, and those go
-to `kora_sql_deadletter` while the rest are written. Lock waits, deadlocks and
-connection errors still retry with backoff. Dead-lettered composite keys are
-stored as a JSON array (scalar keys are stored as-is). On first use of a table
-the conflict key is checked against its PRIMARY/UNIQUE indexes, and a warning is
-logged if none matches it exactly: upserts would then insert duplicates instead
-of updating.
+retried. A row-level error (value too long, NULL, constraint) splits the batch
+until only the offending rows remain, and those go to `kora_sql_deadletter`
+while the rest are written. A statement-level error (unknown column or table,
+parse error, missing privilege) fails every row alike, so the whole batch is
+dead-lettered in one insert with one log line; a missing table is first
+retried twice (about 3 s, for a concurrent `ensureTable`). Lock waits,
+deadlocks and connection errors still retry with backoff. If the dead-letter
+insert itself fails, the row stays pending for at most 3 attempts, then it is
+logged in full (`cols_json=...`) and dropped. Dead-lettered composite keys are
+stored as a JSON array of the key components as strings (scalar keys are stored
+as-is); a key longer than the `pk` column's 191 characters keeps a prefix plus
+`~sha:<40 hex>`. On first use of a table the conflict key is checked against
+its PRIMARY/UNIQUE indexes, and a warning is logged if no unique index uses
+only conflict-key columns: upserts would then insert duplicates instead of
+updating. A failed check is retried (up to 3 times).
 
 ### Kora.sql.flush(table?) -> boolean, errString
 Yields until the named table (or everything) has drained.
@@ -205,8 +222,7 @@ Immediate awaited batched upsert (enqueueMany + flush in one call).
 Declare a table in Lua instead of shipping a `.sql` file. If the table is
 missing it is created (`CREATE TABLE IF NOT EXISTS`); if it exists, anything
 missing is **added** (columns, primary key, indexes, foreign keys). Existing
-columns are never dropped, and never altered except by an owner's widening
-`modify` (below): otherwise a type, nullability or collation that
+columns are never dropped, and never altered except by a safe `modify` (below): otherwise a type, nullability or collation that
 differs from the spec is returned in `report.warnings` and logged (one summary line per table). Safe to call
 on every boot. `ensureTables` runs the list in order, so list foreign key
 parents first, and stops at the first error.
@@ -242,9 +258,9 @@ Optional spec features:
 - `columns[].generated = { expr = "...", stored = false }` — generated column (`STORED` unless `stored = false`). No default/auto_increment, nullability is implied.
 - `checks = { { name = 'chk_x', expr = '`amount` > 0' } }` — CHECK constraints.
 - `columns[].after = 'other'` positions a newly added column; `columns[].comment`, spec `comment`.
-- `columns[].modify = true` — opt in to `MODIFY COLUMN` when the existing type or nullability differs (e.g. widening an enum). Without it a difference is only a warning. A modify is applied only when all of these hold, otherwise it is reported in `report.warnings`:
-  - it **widens** the column: a longer `varchar`/`char`, a larger integer of the same signedness, a wider `decimal`, a larger text/blob type, more fractional-second digits, `float` to `double`, an enum/set that keeps every existing value, or `NOT NULL` to `NULL`. Narrowing, signedness changes and `NULL` to `NOT NULL` are never applied;
-  - the calling resource **owns** the table: kora_sql records the creator of every table it creates in `kora_sql_schema_owners`, and a table that existed before ownership tracking is claimed by the first resource that modifies it;
+- `columns[].modify = true` — opt in to `MODIFY COLUMN` when the existing type or nullability differs (e.g. widening an enum). Without it a difference is only a warning. A modify is applied only when all of these hold; otherwise it is reported in `report.warnings` **and logged at warn, naming the resource**:
+  - it cannot lose data. Accepted transitions: a longer `varchar`/`char`, `char` to `varchar`; `char`/`varchar` to `text`/`mediumtext`/`longtext` (to `tinytext` only when 4×length ≤ 255); `binary`/`varbinary` to a blob; a larger integer of the same signedness; an unsigned integer to a strictly larger signed one (`int unsigned` to `bigint`); an integer to a `decimal` with enough integer digits (tinyint 3, smallint 5, mediumint 8, int 10, bigint 20); a wider `decimal` (no fewer integer or fractional digits); a larger text/blob type; more fractional-second digits; `float` to `double`; an enum/set that keeps every existing value; `NOT NULL` to `NULL`; and `NULL` to `NOT NULL` once the column holds no NULLs (checked first). Narrowing, signed to unsigned and enum value removal are never applied;
+  - if the table has a recorded owner, the calling resource is that owner. kora_sql records (and logs at warn) the creator of every table it creates in `kora_sql_schema_owners`. A table with **no** recorded owner (it existed before ownership tracking) keeps the earlier behaviour: any resource's safe modify applies, with a warn line, and the modify does not claim the table. To give a pre-existing table an owner, insert a row into `kora_sql_schema_owners`;
   - the spec is not `extend` (an extend table belongs to someone else);
   - `kora_sql_schema_allow_modify` is not `false`.
 - `seed.once = true` — only seed when this call created the table (first install). Without it the seed runs `INSERT IGNORE` every boot, which re-adds rows an admin deleted.
@@ -318,10 +334,15 @@ only dates and JSON (as upstream). `set kora_sql_ox_typecast false` disables it;
   values concatenated in) is sent as plain text: one round trip, nothing
   cached. Transactions, `transactionChecked`, `startTransaction` and `batch`
   follow the same rule, with the same automatic fallback for statements MySQL
-  cannot prepare. On the text protocol an object bind value is never expanded:
-  `UPDATE t SET ? WHERE ...` with a table does **not** become `col = value`
-  assignments (it did inside transactions before; it never worked for ordinary
-  queries). Write the columns out explicitly.
+  cannot prepare, except that a transaction/`batch`/`startTransaction`
+  statement with an **array or table bind** (`WHERE id IN (?)` with
+  `{ {1,2,3} }`) always uses the text protocol, where the array expands to
+  `1,2,3` as it always did (the binary protocol would send `'[1,2,3]'` and
+  silently match nothing). On the text protocol an object bind value is never
+  expanded: `UPDATE t SET ? WHERE ...` with a table does **not** become
+  `col = value` assignments (it did inside transactions before; it never worked
+  for ordinary queries); it is sent as its JSON text, which suits a JSON column.
+  Write the columns out explicitly.
 - **Caller identity.** Slow-query attribution and the housing guard below use
   the real calling resource (`GetInvokingResource()`). A resource name passed
   as the trailing argument is honoured only when kora_sql's own compat shims
