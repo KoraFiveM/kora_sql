@@ -38,10 +38,13 @@ other non-network configuration errors still fail immediately.
 
 ## `Kora.sql.*` (modern)
 
-Add to your resource, in order:
+Server-side only. Add to your resource:
 ```lua
 shared_script '@kora_lib/init.lua'
-shared_script '@kora_sql/init.lua'
+server_scripts {
+    '@kora_sql/init.lua', -- first server script; never shared or client
+    -- ...
+}
 ```
 
 ### Kora.sql.ready(timeoutMs?)

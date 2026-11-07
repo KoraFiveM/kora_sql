@@ -1,8 +1,9 @@
 -- '@kora_sql/init.lua' -- installs Kora.sql.* into the CONSUMER's own Lua VM.
 --
--- A consumer opts in with, in this order:
+-- SERVER-ONLY. A consumer opts in with:
 --     shared_script '@kora_lib/init.lua'
---     shared_script '@kora_sql/init.lua'
+--     server_scripts { '@kora_sql/init.lua', ... }   -- first server script
+-- Never list it in shared/client scripts: kora_sql serves no files to clients.
 --
 -- WHY THIS IS LEGAL: kora_lib/init.lua creates the global `Kora` as a plain table
 -- whose metatable has only __index (no __newindex). So `Kora.sql = {...}` from a
@@ -18,6 +19,7 @@
 -- unconditionally -- so Kora.sql.query would EXIST on servers not running kora_sql
 -- and fail at runtime. This opt-in include is strictly safer.
 
+assert(type(IsDuplicityVersion) ~= 'function' or IsDuplicityVersion(), '@kora_sql/init.lua is server-only: list it in server_scripts, not shared/client scripts.')
 assert(Kora, '@kora_sql/init.lua must be loaded AFTER @kora_lib/init.lua (add its shared_script first).')
 
 Kora.sql = Kora.sql or {}

@@ -93,7 +93,7 @@ never converted.
 ```lua
 -- server, after:
 --   shared_script '@kora_lib/init.lua'
---   shared_script '@kora_sql/init.lua'
+--   server_script '@kora_sql/init.lua'  (server-only, never shared)
 local rows, err = Kora.sql.query('SELECT * FROM players WHERE license = ?', { license })
 if not rows then
     print('query failed:', err)

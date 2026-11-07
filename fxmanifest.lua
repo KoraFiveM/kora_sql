@@ -23,15 +23,10 @@ dependency 'kora_lib'
 -- resources/[compat]/mysql-async (it owns that name, like stubs/oxmysql owns oxmysql).
 provide 'ghmattimysql'
 
-files {
-    'init.lua',       -- '@kora_sql/init.lua' -- installs Kora.sql.* into a consumer VM
-    'lib/MySQL.lua'   -- '@kora_sql/lib/MySQL.lua' -- the mysql-async/oxmysql `MySQL` global
-}
-
-shared_scripts {
-    '@kora_lib/init.lua',
-    'config.lua'
-}
+-- No `files`, no shared/client scripts: kora_sql is server-only and ships
+-- nothing to players. '@kora_sql/init.lua' and '@kora_sql/lib/MySQL.lua' are
+-- server_scripts includes in consumers, which read straight from disk and do
+-- not need `files`. Never add them to a consumer's shared or client scripts.
 
 -- Load order here is deliberately NOT load-bearing, and that is the design
 -- goal: the JS entry registers exports.kora_sql:* at its own load time, and every
@@ -41,11 +36,14 @@ shared_scripts {
 -- of thing that works on one build and breaks on the next. Listed explicitly
 -- (never globbed) so the intended sequence is documented, not implied by
 -- alphabetical glob expansion.
+--   0. @kora_lib/init.lua + config.lua  first: compat/* read Config.compat at load
 --   1. dist/build.js        bundled driver + mysql2 + export surface
 --   2. server/ready.lua     qbsql:ready fan-out + isReady polling helper
 --   3. server/commands.lua  /qbsql console commands (consult ready.lua)
 --   4. server/compat/*      pure translation layers, no internal dependents
 server_scripts {
+    '@kora_lib/init.lua',
+    'config.lua',
     'dist/build.js',
     'server/ready.lua',
     'server/commands.lua',
