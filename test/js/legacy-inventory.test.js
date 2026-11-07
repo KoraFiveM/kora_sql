@@ -16,10 +16,12 @@ function fixture(options = {}) {
         request: options.request || ((callback) => queueMicrotask(() => callback(1, null))),
         onStop: (callback) => listeners.push(callback),
     });
-    const pool = { execute: async (sql, params) => {
+    // Bound statements arrive via execute(), parameter-less ones via query().
+    const run = async (sql, params) => {
         calls.push({ sql, params });
         return [{ affectedRows: 7, insertId: 0 }, undefined];
-    } };
+    };
+    const pool = { execute: run, query: run };
     const executor = new Executor({ read: pool, write: pool }, {
         isPreparable: () => true, recordHit: () => {},
     }, { record: (...args) => stats.push(args) }, bridge);

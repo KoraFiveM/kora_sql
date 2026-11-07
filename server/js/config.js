@@ -42,6 +42,63 @@ function getBoolConvar(name, def) {
     return raw === 'true' || raw === '1' || raw === 'yes';
 }
 
+// `ssl` as given in a connection string: a JSON object of mysql2/tls options
+// (oxmysql's documented form, e.g. ssl={"rejectUnauthorized":true}), or a
+// boolean. `true` enables TLS with certificate verification.
+function parseSsl(value) {
+    const text = String(value).trim();
+    if (/^(?:true|1|yes|required?)$/i.test(text)) return {};
+    if (/^(?:false|0|no|off|disabled?)$/i.test(text)) return undefined;
+    let parsed;
+    try { parsed = JSON.parse(text); } catch (_) { parsed = undefined; }
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
+    throw new Error(`qbsql: connection string option ssl must be true/false or a JSON object, got '${text.slice(0, 64)}'`);
+}
+
+// sslmode in the libpq / MySQL / .NET connector spellings some hosts document
+// (mysql-async strings often carry `SslMode=none`).
+function parseSslMode(value) {
+    const mode = String(value).trim().toLowerCase().replace(/[-_]/g, '');
+    if (mode === 'none' || mode === 'disable' || mode === 'disabled') return undefined;
+    if (mode === 'prefer' || mode === 'preferred') {
+        // mysql2 cannot fall back from TLS to plaintext per connection.
+        log.warn('config', `sslmode=${value} is not supported (no opportunistic TLS); the connection is NOT encrypted. Use sslmode=require or ssl={...} to encrypt.`);
+        return undefined;
+    }
+    if (mode === 'require' || mode === 'required') return { rejectUnauthorized: false };
+    if (mode === 'verifyca' || mode === 'verifyfull' || mode === 'verifyidentity') return { rejectUnauthorized: true };
+    throw new Error(`qbsql: unsupported sslmode '${value}' (use disable, require, verify-ca or verify-full)`);
+}
+
+// Apply one connection-string option. Only options with a meaning here are
+// accepted; anything else is logged, never silently dropped, so an operator
+// who copied an oxmysql option knows it had no effect. Pool behaviour
+// options (multipleStatements, typeCast, ...) are deliberately NOT honoured
+// from the connection string: they are kora_sql convars.
+function applyOption(out, key, value) {
+    switch (key.toLowerCase()) {
+        case 'charset':
+            out.charset = value;
+            return;
+        case 'ssl':
+            out.ssl = parseSsl(value);
+            return;
+        case 'sslmode':
+        case 'ssl-mode':
+        case 'ssl_mode':
+            out.ssl = parseSslMode(value);
+            return;
+        case 'connecttimeout': {
+            const n = parseInt(value, 10);
+            if (!Number.isFinite(n) || n <= 0) throw new Error(`qbsql: connectTimeout must be a positive number of milliseconds, got '${value}'`);
+            out.connectTimeout = n;
+            return;
+        }
+        default:
+            log.warn('config', `mysql_connection_string option '${key}' is not supported by kora_sql and was ignored`);
+    }
+}
+
 // Parse either mysql://user:pass@host:port/db?flags  OR  the legacy
 // semicolon form: host=…;user=…;password=…;database=…;port=…
 function parseConnectionString(str) {
@@ -59,6 +116,8 @@ function parseConnectionString(str) {
         password: '',
         database: undefined,
         charset: 'utf8mb4',
+        ssl: undefined,
+        connectTimeout: undefined,
     };
 
     if (str.startsWith('mysql://') || str.startsWith('mariadb://')) {
@@ -70,8 +129,10 @@ function parseConnectionString(str) {
         out.database = u.pathname && u.pathname.length > 1
             ? decodeURIComponent(u.pathname.slice(1))
             : undefined;
-        const cs = u.searchParams.get('charset');
-        if (cs) out.charset = cs;
+        for (const [key, value] of u.searchParams) {
+            if (key.toLowerCase() === 'charset' && !value) continue;
+            applyOption(out, key, value);
+        }
     } else {
         // Legacy semicolon form.
         for (const pair of str.split(';')) {
@@ -84,7 +145,7 @@ function parseConnectionString(str) {
             else if (k === 'user' || k === 'uid' || k === 'userid') out.user = v;
             else if (k === 'password' || k === 'pwd') out.password = v;
             else if (k === 'database' || k === 'db') out.database = v;
-            else if (k === 'charset') out.charset = v;
+            else applyOption(out, k, v);
         }
     }
 
@@ -102,6 +163,25 @@ function load() {
         connection,
         readPoolSize: getIntConvar('qbsql_read_pool_size', 16),
         writePoolSize: getIntConvar('qbsql_write_pool_size', 8),
+        // A separate small pool for the write queue's flush, so ad-hoc writes,
+        // transactions and schema work cannot starve player saves. 0 = flush
+        // on the write pool (the previous behaviour).
+        flushPoolSize: Math.max(0, getIntConvar('kora_sql_flush_pool_size', 4)),
+        // Read-pool statement timeout in ms (client side, plus the server's
+        // max_execution_time / max_statement_time on read connections). 0 = off.
+        queryTimeout: Math.max(0, getIntConvar('kora_sql_query_timeout', 30000)),
+        // Longest a query waits for a free pool connection before failing. 0 = forever.
+        acquireTimeout: Math.max(0, getIntConvar('kora_sql_acquire_timeout', 30000)),
+        // Callers allowed to wait for a connection per pool before new calls fail fast. 0 = unbounded.
+        poolQueueLimit: Math.max(0, getIntConvar('kora_sql_pool_queue_limit', 10000)),
+        // Concurrent startTransaction callbacks (each pins a write connection for up to 30 s).
+        maxStartTransactions: Math.max(0, getIntConvar('kora_sql_max_start_transactions', 0)),
+        // Distinct query fingerprints kept by /qbsql stats; older ones fold into <other>.
+        statsMaxFingerprints: Math.max(1, getIntConvar('kora_sql_stats_max_fingerprints', 2000)),
+        // Check each queued table's conflict key against its PRIMARY/UNIQUE indexes once.
+        verifyConflictKeys: getBoolConvar('kora_sql_verify_conflict_keys', true),
+        // ensureTable `modify = true` (still owner-only and widening-only).
+        schemaAllowModify: getBoolConvar('kora_sql_schema_allow_modify', true),
         statementCache: getRenamedIntConvar('kora_sql_statement_cache', 'qbsql_statement_cache', 256),
         flushInterval: getIntConvar('qbsql_flush_interval', 250),
         maxPendingRows: getIntConvar('qbsql_max_pending_rows', 500),
@@ -122,12 +202,25 @@ function load() {
 
     log.setDebug(cfg.debug);
 
+    // Default startTransaction cap: leave two write connections for ad-hoc writes.
+    if (cfg.maxStartTransactions === 0) cfg.maxStartTransactions = Math.max(1, cfg.writePoolSize - 2);
+
     // Guard the MySQL prepared-statement ceiling. mysql2 keeps a per-connection
     // prepared-statement cache of `statementCache`; the real server-side count
     // is that times the total connection count. MySQL's max_prepared_stmt_count
     // defaults to 16382. Refuse to start rather than fail opaque later.
     const totalConns = cfg.readPoolSize + cfg.writePoolSize;
     const worstCasePrepared = cfg.statementCache * totalConns;
+    // The flush pool only ever runs a few batch statement shapes, so its
+    // per-connection cache is small. It must never be the reason a config
+    // that booted before now refuses to: without headroom, flush shares the
+    // write pool instead.
+    cfg.flushStatementCache = Math.min(cfg.statementCache, 64);
+    if (cfg.flushPoolSize > 0 && worstCasePrepared <= 8000
+        && worstCasePrepared + cfg.flushStatementCache * cfg.flushPoolSize > 8000) {
+        log.warn('config', 'kora_sql_flush_pool_size would exceed the prepared-statement ceiling; the queue flush shares the write pool');
+        cfg.flushPoolSize = 0;
+    }
     if (worstCasePrepared > 8000) {
         throw new Error(
             `qbsql: kora_sql_statement_cache (${cfg.statementCache}) x total connections (${totalConns}) ` +
@@ -149,4 +242,4 @@ function connectionCollation(charset) {
     return value.includes('_') ? value : `${value}_unicode_ci`;
 }
 
-module.exports = { load, parseConnectionString, connectionCollation };
+module.exports = { load, parseConnectionString, connectionCollation, parseSsl, parseSslMode };

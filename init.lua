@@ -35,16 +35,28 @@ Kora.sql.NULL = '\0qbsql:null\0'
 
 local driver = exports.kora_sql
 
+-- Optional wait limit, read from the CALLING resource's Config.sql.awaitTimeout
+-- (ms) because this file runs in the consumer's VM. Unset or 0 = wait for the
+-- driver's answer (reads are already bounded by kora_sql_query_timeout).
+local function awaitTimeoutMs()
+    local ms = Config and type(Config.sql) == 'table' and tonumber(Config.sql.awaitTimeout)
+    if ms and ms > 0 then return ms end
+    return nil
+end
+
 -- Run a JS export that returns a promise, and Await it on this coroutine.
 -- Returns (value, errorString). The JS `dataExport` wrapper returns a promise
 -- when no callback is passed; FiveM marshals its resolution back here.
 local function await(name, ...)
     local args = { ... }
     local p = promise.new()
+    local settled = false
     -- We pass a Lua callback as the trailing argument; the JS side detects a
     -- callable last arg and calls cb(result, errString) instead of returning a
     -- promise. This avoids depending on cross-boundary promise marshalling.
     args[#args + 1] = function(result, err)
+        if settled then return end
+        settled = true
         if err then
             p:reject(err)
         else
@@ -55,6 +67,15 @@ local function await(name, ...)
     -- the (nil, err) contract instead of throwing into the caller.
     local called, callErr = pcall(function() driver[name](driver, table.unpack(args)) end)
     if not called then return nil, tostring(callErr) end
+    local limit = awaitTimeoutMs()
+    if limit and not settled and type(SetTimeout) == 'function' then
+        SetTimeout(limit, function()
+            if settled then return end
+            settled = true
+            -- Only the wait ends: a write may still commit after this.
+            p:reject(('qbsql: no reply to %s within %dms; the statement may still complete'):format(name, limit))
+        end)
+    end
     local ok, res = pcall(Citizen.Await, p)
     if not ok then
         return nil, tostring(res)

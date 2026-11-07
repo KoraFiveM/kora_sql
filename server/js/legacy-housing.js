@@ -39,7 +39,12 @@ function touchesStockTables(sql) {
     // Mask values/comments before looking for table identifiers, so ordinary
     // data mentioning a stock table never changes an unrelated query's route.
     const code = sql.replace(/'(?:\\.|''|[^'\\])*'|"(?:\\.|""|[^"\\])*"|\/\*[\s\S]*?\*\/|--[^\n]*(?:\n|$)|#[^\n]*(?:\n|$)/g, ' ');
-    return /\b(?:FROM|JOIN|UPDATE|INTO|TABLE)\s+(?:(?:`[^`]+`|[A-Za-z_][\w]*)\s*\.\s*)?(?:`(?:houselocations|player_houses)`|(?:houselocations|player_houses)\b)/i.test(code);
+    // Any mention of either table name in the remaining SQL text. Anchoring on
+    // FROM/JOIN/UPDATE/INTO/TABLE missed `INSERT player_houses`, `REPLACE ...`,
+    // `TRUNCATE player_houses` and comma joins. This fails closed: a column or
+    // alias that happens to use one of these names is rejected rather than
+    // let through, which is the right direction for a guard.
+    return /\b(?:houselocations|player_houses)\b/i.test(code);
 }
 
 function createLegacyHousingBridge({ getState, request, onStop }) {
@@ -51,8 +56,11 @@ function createLegacyHousingBridge({ getState, request, onStop }) {
         for (const finish of [...pending]) finish(null, `${name} stopped during legacy housing read`);
     });
     return function legacyHousing(sql, params, resource) {
-        // This is the original export caller, supplied by kora_sql, never a bind.
-        // The owner must read its archive during import before it becomes ready.
+        // The original export caller. exports.js derives it from
+        // GetInvokingResource() and only trusts a forwarded name when kora_sql's
+        // own compat shims made the call, so another resource cannot claim to be
+        // kora_housing. The owner must read its archive during import before it
+        // becomes ready.
         if (resource === 'kora_housing' || !touchesStockTables(sql)) return null;
         const state = getState();
         if (state === 'started' || state === 'starting') selected = true;

@@ -6,19 +6,28 @@ const { Executor, normalizeNamedPlaceholders } = require('../../server/js/execut
 
 function harness(results) {
     const calls = [];
+    const protocols = [];
+    const touched = [];
     const pool = {
         execute: async (sql, params) => {
             calls.push([sql, params]);
+            protocols.push('execute');
+            return [results.shift(), []];
+        },
+        query: async (sql, params) => {
+            calls.push([sql, params]);
+            protocols.push('query');
             return [results.shift(), []];
         },
     };
     const statements = {
         isPreparable: () => true,
-        recordHit: () => {},
-        markUnpreparable: () => {},
+        recordHit: (sql) => touched.push(sql),
+        recordMiss: (sql) => touched.push(sql),
+        markUnpreparable: (sql) => touched.push(sql),
     };
     const stats = { record: () => {} };
-    return { executor: new Executor({ read: pool, write: pool }, statements, stats), calls };
+    return { executor: new Executor({ read: pool, write: pool }, statements, stats), calls, protocols, touched, pool };
 }
 
 test('oxmysql prepare executes every supplied parameter set', async () => {
@@ -73,6 +82,45 @@ test('mysql-async @name placeholders normalize without touching literals/comment
     assert.equal(result.params.id, 7);
     assert.equal(result.params.tag, 'x');
     assert.equal(result.params.email, 'a@example.com');
+});
+
+test('P1: parameter-less SQL uses the text protocol and never enters the statement cache', async () => {
+    const { executor, protocols, touched, calls } = harness([[{ n: 1 }], [{ n: 2 }], [{ n: 3 }]]);
+    await executor.query("SELECT * FROM players WHERE citizenid = 'ABC123'", []);
+    await executor.query("SELECT * FROM players WHERE citizenid = 'DEF456'");
+    await executor.query('SELECT * FROM players WHERE citizenid = ?', ['GHI789']);
+    assert.deepEqual(protocols, ['query', 'query', 'execute']);
+    assert.deepEqual(touched, ['SELECT * FROM players WHERE citizenid = ?'], 'one-shot texts must not evict cached marks');
+    assert.deepEqual(calls[1], ["SELECT * FROM players WHERE citizenid = 'DEF456'", []]);
+});
+
+test('P1: the oxmysql view keeps prepared-path result casting on the text path', async () => {
+    const { executor, pool } = harness([[{ n: 1 }]]);
+    let options;
+    pool.query = async (opts) => { options = opts; return [[{ n: 1 }], []]; };
+    await executor.withOxTypeCast().query('SELECT NOW() AS n', []);
+    assert.equal(options.sql, 'SELECT NOW() AS n');
+    assert.equal(options.typeCast, require('../../server/js/typecast').typeCastExecute);
+});
+
+test('S6: read-pool statements carry the query timeout; write-pool statements never do', async () => {
+    const seen = [];
+    const read = {
+        execute: async (...args) => { seen.push(['read', ...args]); return [[], []]; },
+        query: async (...args) => { seen.push(['read', ...args]); return [[], []]; },
+    };
+    const write = {
+        execute: async (...args) => { seen.push(['write', ...args]); return [{ affectedRows: 1 }, []]; },
+        query: async (...args) => { seen.push(['write', ...args]); return [{ affectedRows: 1 }, []]; },
+    };
+    const executor = new Executor({ read, write }, { isPreparable: () => true, recordHit() {} }, { record() {} });
+    executor.readTimeout = 1500;
+    await executor.query('SELECT * FROM t WHERE id = ?', [1]);
+    await executor.query('SELECT 1', []);
+    await executor.update('UPDATE t SET v = ? WHERE id = ?', [1, 2]);
+    assert.deepEqual(seen[0], ['read', { sql: 'SELECT * FROM t WHERE id = ?', values: [1], timeout: 1500 }]);
+    assert.deepEqual(seen[1], ['read', { sql: 'SELECT 1', values: [], timeout: 1500 }]);
+    assert.deepEqual(seen[2], ['write', 'UPDATE t SET v = ? WHERE id = ?', [1, 2]]);
 });
 
 test('oxmysql prepare returns every row of a multi-row SELECT, not only the first', async () => {

@@ -102,6 +102,46 @@ test('a boot failure reaches callback callers as the real startup error', async 
     assert.deepEqual(await result, { value: null, err: 'database unavailable' });
 });
 
+test('S5: the trailing resource is trusted only from kora_sql itself; others are identified by GetInvokingResource', async () => {
+    let invoker = 'kora_sql';
+    const seen = [];
+    const registered = {};
+    const api = {
+        isReady: () => true,
+        ready: async () => true,
+        version: () => ({}),
+        executor: { query: async (sql, params, resource) => { seen.push(resource); return []; } },
+        txn: { startTransaction: async () => true },
+    };
+    register(api, (name, fn) => { registered[name] = fn; }, { getInvokingResource: () => invoker, currentResource: 'kora_sql' });
+
+    await registered.query('SELECT 1', [], 'real_consumer');           // forwarded by a compat shim
+    invoker = 'spoofer';
+    await registered.query('SELECT 1', [], 'kora_housing');            // claim ignored
+    await registered.query('SELECT 1', []);                            // no claim at all
+    invoker = null;
+    await registered.query('SELECT 1', [], 'internal');                // same-runtime call
+    assert.deepEqual(seen, ['real_consumer', 'spoofer', 'spoofer', 'internal']);
+});
+
+test('S6: fire-and-forget enqueues retained before readiness are bounded', async () => {
+    const gate = deferred();
+    const { api, registered } = harness(gate);
+    let thrown = null;
+    let accepted = 0;
+    for (let i = 0; i < 100001 && !thrown; i++) {
+        try { registered.enqueue('players', 'citizenid', { pk: `P${i}`, cols: { v: i } }, {}); accepted++; } catch (err) { thrown = err; }
+    }
+    assert.equal(accepted, 100000);
+    assert.match(thrown && thrown.message, /100000 writes are already waiting/);
+    let drained = 0;
+    api.queue = { enqueue: () => { drained++; } };
+    gate.resolve(true);
+    await gate.promise;
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(drained, 100000, 'every accepted write is still delivered');
+});
+
 test('oxmysql async aliases are genuine JS promise exports', async () => {
     const provided = {};
     const previousOn = globalThis.on;

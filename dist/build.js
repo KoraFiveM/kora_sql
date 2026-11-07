@@ -60,6 +60,56 @@ var require_config = __commonJS({
       return raw === "true" || raw === "1" || raw === "yes";
     }
     __name(getBoolConvar, "getBoolConvar");
+    function parseSsl(value) {
+      const text = String(value).trim();
+      if (/^(?:true|1|yes|required?)$/i.test(text)) return {};
+      if (/^(?:false|0|no|off|disabled?)$/i.test(text)) return void 0;
+      let parsed;
+      try {
+        parsed = JSON.parse(text);
+      } catch (_) {
+        parsed = void 0;
+      }
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
+      throw new Error(`qbsql: connection string option ssl must be true/false or a JSON object, got '${text.slice(0, 64)}'`);
+    }
+    __name(parseSsl, "parseSsl");
+    function parseSslMode(value) {
+      const mode = String(value).trim().toLowerCase().replace(/[-_]/g, "");
+      if (mode === "none" || mode === "disable" || mode === "disabled") return void 0;
+      if (mode === "prefer" || mode === "preferred") {
+        log2.warn("config", `sslmode=${value} is not supported (no opportunistic TLS); the connection is NOT encrypted. Use sslmode=require or ssl={...} to encrypt.`);
+        return void 0;
+      }
+      if (mode === "require" || mode === "required") return { rejectUnauthorized: false };
+      if (mode === "verifyca" || mode === "verifyfull" || mode === "verifyidentity") return { rejectUnauthorized: true };
+      throw new Error(`qbsql: unsupported sslmode '${value}' (use disable, require, verify-ca or verify-full)`);
+    }
+    __name(parseSslMode, "parseSslMode");
+    function applyOption(out, key, value) {
+      switch (key.toLowerCase()) {
+        case "charset":
+          out.charset = value;
+          return;
+        case "ssl":
+          out.ssl = parseSsl(value);
+          return;
+        case "sslmode":
+        case "ssl-mode":
+        case "ssl_mode":
+          out.ssl = parseSslMode(value);
+          return;
+        case "connecttimeout": {
+          const n = parseInt(value, 10);
+          if (!Number.isFinite(n) || n <= 0) throw new Error(`qbsql: connectTimeout must be a positive number of milliseconds, got '${value}'`);
+          out.connectTimeout = n;
+          return;
+        }
+        default:
+          log2.warn("config", `mysql_connection_string option '${key}' is not supported by kora_sql and was ignored`);
+      }
+    }
+    __name(applyOption, "applyOption");
     function parseConnectionString(str) {
       if (!str) {
         throw new Error(
@@ -72,7 +122,9 @@ var require_config = __commonJS({
         user: "root",
         password: "",
         database: void 0,
-        charset: "utf8mb4"
+        charset: "utf8mb4",
+        ssl: void 0,
+        connectTimeout: void 0
       };
       if (str.startsWith("mysql://") || str.startsWith("mariadb://")) {
         const u = new URL(str);
@@ -81,8 +133,10 @@ var require_config = __commonJS({
         out.user = decodeURIComponent(u.username) || out.user;
         out.password = decodeURIComponent(u.password) || "";
         out.database = u.pathname && u.pathname.length > 1 ? decodeURIComponent(u.pathname.slice(1)) : void 0;
-        const cs = u.searchParams.get("charset");
-        if (cs) out.charset = cs;
+        for (const [key, value] of u.searchParams) {
+          if (key.toLowerCase() === "charset" && !value) continue;
+          applyOption(out, key, value);
+        }
       } else {
         for (const pair of str.split(";")) {
           const eq = pair.indexOf("=");
@@ -94,7 +148,7 @@ var require_config = __commonJS({
           else if (k === "user" || k === "uid" || k === "userid") out.user = v;
           else if (k === "password" || k === "pwd") out.password = v;
           else if (k === "database" || k === "db") out.database = v;
-          else if (k === "charset") out.charset = v;
+          else applyOption(out, k, v);
         }
       }
       if (!out.database) {
@@ -109,6 +163,25 @@ var require_config = __commonJS({
         connection,
         readPoolSize: getIntConvar("qbsql_read_pool_size", 16),
         writePoolSize: getIntConvar("qbsql_write_pool_size", 8),
+        // A separate small pool for the write queue's flush, so ad-hoc writes,
+        // transactions and schema work cannot starve player saves. 0 = flush
+        // on the write pool (the previous behaviour).
+        flushPoolSize: Math.max(0, getIntConvar("kora_sql_flush_pool_size", 4)),
+        // Read-pool statement timeout in ms (client side, plus the server's
+        // max_execution_time / max_statement_time on read connections). 0 = off.
+        queryTimeout: Math.max(0, getIntConvar("kora_sql_query_timeout", 3e4)),
+        // Longest a query waits for a free pool connection before failing. 0 = forever.
+        acquireTimeout: Math.max(0, getIntConvar("kora_sql_acquire_timeout", 3e4)),
+        // Callers allowed to wait for a connection per pool before new calls fail fast. 0 = unbounded.
+        poolQueueLimit: Math.max(0, getIntConvar("kora_sql_pool_queue_limit", 1e4)),
+        // Concurrent startTransaction callbacks (each pins a write connection for up to 30 s).
+        maxStartTransactions: Math.max(0, getIntConvar("kora_sql_max_start_transactions", 0)),
+        // Distinct query fingerprints kept by /qbsql stats; older ones fold into <other>.
+        statsMaxFingerprints: Math.max(1, getIntConvar("kora_sql_stats_max_fingerprints", 2e3)),
+        // Check each queued table's conflict key against its PRIMARY/UNIQUE indexes once.
+        verifyConflictKeys: getBoolConvar("kora_sql_verify_conflict_keys", true),
+        // ensureTable `modify = true` (still owner-only and widening-only).
+        schemaAllowModify: getBoolConvar("kora_sql_schema_allow_modify", true),
         statementCache: getRenamedIntConvar("kora_sql_statement_cache", "qbsql_statement_cache", 256),
         flushInterval: getIntConvar("qbsql_flush_interval", 250),
         maxPendingRows: getIntConvar("qbsql_max_pending_rows", 500),
@@ -127,8 +200,14 @@ var require_config = __commonJS({
         debug: getBoolConvar("qbsql_debug", false)
       };
       log2.setDebug(cfg.debug);
+      if (cfg.maxStartTransactions === 0) cfg.maxStartTransactions = Math.max(1, cfg.writePoolSize - 2);
       const totalConns = cfg.readPoolSize + cfg.writePoolSize;
       const worstCasePrepared = cfg.statementCache * totalConns;
+      cfg.flushStatementCache = Math.min(cfg.statementCache, 64);
+      if (cfg.flushPoolSize > 0 && worstCasePrepared <= 8e3 && worstCasePrepared + cfg.flushStatementCache * cfg.flushPoolSize > 8e3) {
+        log2.warn("config", "kora_sql_flush_pool_size would exceed the prepared-statement ceiling; the queue flush shares the write pool");
+        cfg.flushPoolSize = 0;
+      }
       if (worstCasePrepared > 8e3) {
         throw new Error(
           `qbsql: kora_sql_statement_cache (${cfg.statementCache}) x total connections (${totalConns}) = ${worstCasePrepared} prepared statements, over the safe ceiling of 8000 (MySQL max_prepared_stmt_count defaults to 16382, and it is GLOBAL on a shared host). Lower kora_sql_statement_cache or the pool sizes.`
@@ -142,7 +221,7 @@ var require_config = __commonJS({
       return value.includes("_") ? value : `${value}_unicode_ci`;
     }
     __name(connectionCollation, "connectionCollation");
-    module2.exports = { load, parseConnectionString, connectionCollation };
+    module2.exports = { load, parseConnectionString, connectionCollation, parseSsl, parseSslMode };
   }
 });
 
@@ -20675,8 +20754,8 @@ var require_pool4 = __commonJS({
     var mysql = require_promise();
     var log2 = require_logger();
     var { connectionCollation } = require_config();
-    function poolOptions(cfg, connectionLimit) {
-      return {
+    function poolOptions(cfg, connectionLimit, statementCache) {
+      const options = {
         host: cfg.connection.host,
         port: cfg.connection.port,
         user: cfg.connection.user,
@@ -20685,20 +20764,22 @@ var require_pool4 = __commonJS({
         charset: connectionCollation(cfg.connection.charset),
         connectionLimit,
         waitForConnections: true,
-        queueLimit: 0,
-        // unbounded queue -- we cap upstream in the queue module.
+        // Bounded: during a database stall, new calls fail fast with "Queue
+        // limit reached." instead of accumulating in memory without limit.
+        // 0 (kora_sql_pool_queue_limit 0) restores the unbounded queue.
+        queueLimit: cfg.poolQueueLimit || 0,
         enableKeepAlive: true,
         keepAliveInitialDelay: 1e4,
-        // mysql2 has no separate "acquire" timeout for a getConnection() call
-        // that is queued waiting for a busy connection to free up (queueLimit
-        // above is unbounded, and that wait is genuinely open-ended -- not
-        // something this option fixes). What connectTimeout DOES bound is how
-        // long establishing a NEW physical connection may hang (DB
-        // unreachable, network stall, firewall black-hole): without it a
-        // stuck TCP handshake can hang far longer than is useful. Made
-        // explicit here rather than relying on mysql2's implicit default so
-        // the behaviour is documented and easy to find.
-        connectTimeout: 1e4,
+        // connectTimeout bounds how long establishing a NEW physical
+        // connection may hang (DB unreachable, network stall, firewall
+        // black-hole). The wait for a BUSY connection is bounded separately by
+        // withAcquireTimeout() below. Overridable with ?connectTimeout=.
+        connectTimeout: cfg.connection.connectTimeout || 1e4,
+        // The text protocol (parameter-less SQL, the unpreparable fallback)
+        // must never expand an object bind into `col = value, ...` assignments
+        // (`UPDATE players SET ? ...` with a client-supplied table would
+        // mass-assign columns). The binary protocol JSON-encodes objects anyway.
+        stringifyObjects: true,
         // mysql2 returns DECIMAL as a STRING by default. Left off, every money
         // column arrives in Lua as "1250.00" and arithmetic silently breaks.
         decimalNumbers: true,
@@ -20721,13 +20802,81 @@ var require_pool4 = __commonJS({
         multipleStatements: cfg.allowMultipleStatements,
         // Per-connection prepared-statement LRU inside mysql2 itself. Our own
         // statements.js LRU tracks the UNPREPARABLE set on top of this.
-        maxPreparedStatements: cfg.statementCache
+        maxPreparedStatements: statementCache || cfg.statementCache
       };
+      if (cfg.connection.ssl) options.ssl = cfg.connection.ssl;
+      return options;
     }
     __name(poolOptions, "poolOptions");
+    function withAcquireTimeout(pool, ms, name) {
+      if (!ms) return pool;
+      const acquire = /* @__PURE__ */ __name(() => new Promise((resolve, reject) => {
+        let settled = false;
+        const timer = setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          const err = new Error(`qbsql: no ${name} connection became free within ${ms}ms`);
+          err.code = "QBSQL_ACQUIRE_TIMEOUT";
+          reject(err);
+        }, ms);
+        pool.getConnection().then((conn) => {
+          clearTimeout(timer);
+          if (settled) {
+            conn.release();
+            return;
+          }
+          settled = true;
+          resolve(conn);
+        }, (err) => {
+          clearTimeout(timer);
+          if (settled) return;
+          settled = true;
+          reject(err);
+        });
+      }), "acquire");
+      const run = /* @__PURE__ */ __name((method) => async (...args) => {
+        const conn = await acquire();
+        try {
+          return await conn[method](...args);
+        } finally {
+          conn.release();
+        }
+      }, "run");
+      return {
+        pool,
+        getConnection: acquire,
+        execute: run("execute"),
+        query: run("query"),
+        end: /* @__PURE__ */ __name(() => pool.end(), "end"),
+        on: /* @__PURE__ */ __name((...args) => pool.on(...args), "on")
+      };
+    }
+    __name(withAcquireTimeout, "withAcquireTimeout");
+    function sessionTimeoutSql(conn, ms) {
+      return conn._isMariaDB ? `SET SESSION max_statement_time = ${(ms / 1e3).toFixed(3)}` : `SET SESSION max_execution_time = ${Math.floor(ms)}`;
+    }
+    __name(sessionTimeoutSql, "sessionTimeoutSql");
+    function limitReadStatements(pool, ms) {
+      if (!ms) return;
+      let warned = false;
+      pool.on("connection", (conn) => {
+        conn.query(sessionTimeoutSql(conn, ms), (err) => {
+          if (err && !warned) {
+            warned = true;
+            log2.warn("pool", `could not set a server-side read timeout (${err.message}); only the client-side timeout applies`);
+          }
+        });
+      });
+    }
+    __name(limitReadStatements, "limitReadStatements");
     async function build(cfg) {
-      const read = mysql.createPool(poolOptions(cfg, cfg.readPoolSize));
-      const write = mysql.createPool(poolOptions(cfg, cfg.writePoolSize));
+      const readRaw = mysql.createPool(poolOptions(cfg, cfg.readPoolSize));
+      limitReadStatements(readRaw, cfg.queryTimeout);
+      const writeRaw = mysql.createPool(poolOptions(cfg, cfg.writePoolSize));
+      const flushRaw = cfg.flushPoolSize > 0 ? mysql.createPool(poolOptions(cfg, cfg.flushPoolSize, cfg.flushStatementCache)) : null;
+      const read = withAcquireTimeout(readRaw, cfg.acquireTimeout, "read");
+      const write = withAcquireTimeout(writeRaw, cfg.acquireTimeout, "write");
+      const flush = flushRaw ? withAcquireTimeout(flushRaw, cfg.acquireTimeout, "flush") : null;
       let version = { raw: "unknown", isMariaDB: false, major: 0, minor: 0, patch: 0 };
       try {
         const [rows] = await read.query("SELECT VERSION() AS v");
@@ -20741,15 +20890,19 @@ var require_pool4 = __commonJS({
           minor: m ? parseInt(m[2], 10) : 0,
           patch: m ? parseInt(m[3], 10) : 0
         };
-        log2.info("pool", `connected to ${raw} (read=${cfg.readPoolSize} write=${cfg.writePoolSize})`);
+        log2.info("pool", `connected to ${raw} (read=${cfg.readPoolSize} write=${cfg.writePoolSize} flush=${cfg.flushPoolSize || "shared"}${cfg.connection.ssl ? " tls" : ""})`);
       } catch (err) {
-        await Promise.allSettled([read.end(), write.end()]);
+        await Promise.allSettled([read.end(), write.end(), flush && flush.end()]);
         throw err;
       }
-      return { read, write, version };
+      return { read, write, flush, version };
     }
     __name(build, "build");
-    module2.exports = { build };
+    function all(pools) {
+      return [pools.read, pools.write, pools.flush].filter(Boolean);
+    }
+    __name(all, "all");
+    module2.exports = { build, all, poolOptions, withAcquireTimeout, sessionTimeoutSql };
   }
 });
 
@@ -20832,11 +20985,44 @@ var require_statements = __commonJS({
 var require_stats = __commonJS({
   "server/js/stats.js"(exports2, module2) {
     "use strict";
+    var OTHER = "<other>";
+    var TOP_N = 10;
+    var LITERALS = /(`(?:[^`]|``)*`)|'(?:\\.|''|[^'\\])*'|"(?:\\.|""|[^"\\])*"|\b0x[0-9a-f]+\b|\b\d+(?:\.\d+)?(?:e[+-]?\d+)?\b/gi;
+    function fingerprint(sql) {
+      if (typeof sql !== "string") return String(sql);
+      return sql.replace(LITERALS, (match, ident) => ident !== void 0 ? ident : "?").replace(/\s+/g, " ").replace(/\(\s*\?(?:\s*,\s*\?)+\s*\)/g, "(?+)").trim();
+    }
+    __name(fingerprint, "fingerprint");
+    function blankAggregate() {
+      return {
+        count: 0,
+        totalMs: 0,
+        maxMs: 0,
+        minMs: Infinity,
+        errors: 0,
+        rowsReturned: 0,
+        lastSeenAt: 0
+      };
+    }
+    __name(blankAggregate, "blankAggregate");
+    function mergeInto(target, agg) {
+      target.count += agg.count;
+      target.totalMs += agg.totalMs;
+      target.maxMs = Math.max(target.maxMs, agg.maxMs);
+      target.minMs = Math.min(target.minMs, agg.minMs);
+      target.errors += agg.errors;
+      target.rowsReturned += agg.rowsReturned;
+      target.lastSeenAt = Math.max(target.lastSeenAt, agg.lastSeenAt);
+    }
+    __name(mergeInto, "mergeInto");
     var _Stats = class _Stats {
-      constructor(slowThreshold, slowRing) {
+      constructor(slowThreshold, slowRing, maxFingerprints) {
         this.slowThreshold = slowThreshold;
         this.slowRingSize = slowRing;
+        this.maxFingerprints = Math.max(1, maxFingerprints || 2e3);
         this.byFingerprint = /* @__PURE__ */ new Map();
+        this.fingerprintCache = /* @__PURE__ */ new Map();
+        this.other = null;
         this.slow = [];
         this.slowHead = 0;
         this.queue = {
@@ -20854,19 +21040,30 @@ var require_stats = __commonJS({
           retries: 0
         };
       }
+      _fingerprint(sql) {
+        let fp = this.fingerprintCache.get(sql);
+        if (fp === void 0) {
+          fp = fingerprint(sql);
+          if (this.fingerprintCache.size >= 1e3) this.fingerprintCache.clear();
+          this.fingerprintCache.set(sql, fp);
+        }
+        return fp;
+      }
       record(sql, ms, rows, errored, resource) {
-        let agg = this.byFingerprint.get(sql);
-        if (!agg) {
-          agg = {
-            count: 0,
-            totalMs: 0,
-            maxMs: 0,
-            minMs: Infinity,
-            errors: 0,
-            rowsReturned: 0,
-            lastSeenAt: 0
-          };
-          this.byFingerprint.set(sql, agg);
+        const fp = this._fingerprint(sql);
+        let agg = this.byFingerprint.get(fp);
+        if (agg) {
+          this.byFingerprint.delete(fp);
+          this.byFingerprint.set(fp, agg);
+        } else {
+          agg = blankAggregate();
+          this.byFingerprint.set(fp, agg);
+          if (this.byFingerprint.size > this.maxFingerprints) {
+            const [oldest, evicted] = this.byFingerprint.entries().next().value;
+            this.byFingerprint.delete(oldest);
+            if (!this.other) this.other = blankAggregate();
+            mergeInto(this.other, evicted);
+          }
         }
         agg.count++;
         agg.totalMs += ms;
@@ -20904,13 +21101,19 @@ var require_stats = __commonJS({
       summary(statementCache) {
         let totalCount = 0, totalMs = 0, totalErrors = 0;
         const top = [];
-        for (const [sql, agg] of this.byFingerprint) {
+        const consider = /* @__PURE__ */ __name((sql, agg) => {
           totalCount += agg.count;
           totalMs += agg.totalMs;
           totalErrors += agg.errors;
-          top.push({ sql, ...agg, avgMs: agg.count ? agg.totalMs / agg.count : 0 });
-        }
-        top.sort((a, b) => b.totalMs - a.totalMs);
+          if (top.length === TOP_N && agg.totalMs <= top[TOP_N - 1].totalMs) return;
+          const entry = { sql, ...agg, avgMs: agg.count ? agg.totalMs / agg.count : 0 };
+          let i = top.length;
+          while (i > 0 && top[i - 1].totalMs < entry.totalMs) i--;
+          top.splice(i, 0, entry);
+          if (top.length > TOP_N) top.pop();
+        }, "consider");
+        for (const [sql, agg] of this.byFingerprint) consider(sql, agg);
+        if (this.other) consider(OTHER, this.other);
         const q = this.queue;
         const flushDurations = q.flushDurationMs;
         const avgFlush = flushDurations.length ? flushDurations.reduce((a, b) => a + b, 0) / flushDurations.length : 0;
@@ -20920,9 +21123,10 @@ var require_stats = __commonJS({
             errors: totalErrors,
             avgMs: totalCount ? totalMs / totalCount : 0,
             distinctFingerprints: this.byFingerprint.size,
+            evictedQueries: this.other ? this.other.count : 0,
             slowCount: this.slow.length,
             slowThreshold: this.slowThreshold,
-            topByTotalMs: top.slice(0, 10)
+            topByTotalMs: top
           },
           queue: {
             boundaryCrossings: q.boundaryCrossings,
@@ -20943,6 +21147,8 @@ var require_stats = __commonJS({
       }
       reset() {
         this.byFingerprint.clear();
+        this.fingerprintCache.clear();
+        this.other = null;
         this.slow = [];
         this.slowHead = 0;
         this.queue = {
@@ -20959,7 +21165,7 @@ var require_stats = __commonJS({
     };
     __name(_Stats, "Stats");
     var Stats2 = _Stats;
-    module2.exports = { Stats: Stats2 };
+    module2.exports = { Stats: Stats2, fingerprint };
   }
 });
 
@@ -21097,6 +21303,25 @@ var require_execute3 = __commonJS({
       return { sql: out, params: normalized };
     }
     __name(normalizeNamedPlaceholders, "normalizeNamedPlaceholders");
+    function hasNoBinds(params) {
+      return Array.isArray(params) && params.length === 0;
+    }
+    __name(hasNoBinds, "hasNoBinds");
+    async function runOnConnection(conn, sql, params, statements) {
+      if (!hasNoBinds(params) && (!statements || statements.isPreparable(sql))) {
+        try {
+          const result = await conn.execute(sql, params);
+          if (statements) statements.recordHit(sql);
+          return result;
+        } catch (err) {
+          if (!isUnpreparableError(err)) throw err;
+          if (statements) statements.markUnpreparable(sql);
+          log2.debug("execute", `unpreparable, falling back to query(): ${sql}`);
+        }
+      }
+      return conn.query(sql, params);
+    }
+    __name(runOnConnection, "runOnConnection");
     function toParamSets(params) {
       const normal = normalizeParams(params);
       return Array.isArray(normal) && normal.length > 0 && normal.every(Array.isArray) ? normal.map(normalizeParams) : [normal];
@@ -21109,6 +21334,7 @@ var require_execute3 = __commonJS({
         this.stats = stats;
         this.legacyInventory = legacyInventory;
         this.legacyHousing = legacyHousing;
+        this.readTimeout = 0;
       }
       // A view of this executor whose queries apply oxmysql's typeCast (booleans,
       // date-as-ms, binary blobs, JSON strings). Only the oxmysql compatibility
@@ -21137,8 +21363,23 @@ var require_execute3 = __commonJS({
         }
         return this.pools.write;
       }
-      _query(pool, sql, params) {
-        return this._oxTypeCast ? pool.query({ sql, values: params, typeCast }) : pool.query(sql, params);
+      // Build mysql2's call arguments. The positional form is kept when no
+      // per-call option applies, so plain calls stay identical to before.
+      _args(pool, sql, params, cast) {
+        const timeout = pool === this.pools.read && this.readTimeout > 0 ? this.readTimeout : 0;
+        if (!cast && !timeout) return [sql, params];
+        const options = { sql, values: params };
+        if (cast) options.typeCast = cast;
+        if (timeout) options.timeout = timeout;
+        return [options];
+      }
+      // Text protocol. `cast` defaults to the full oxmysql text typeCast, which
+      // the unpreparable fallback has always used.
+      _query(pool, sql, params, cast) {
+        return pool.query(...this._args(pool, sql, params, this._oxTypeCast ? cast || typeCast : null));
+      }
+      _execute(pool, sql, params) {
+        return pool.execute(...this._args(pool, sql, params, this._oxTypeCast ? typeCastExecute : null));
       }
       // The one true executor. Returns mysql2's raw [rows|result, fields] pair.
       // Keeping the pair until the final shape adapter is important for
@@ -21156,9 +21397,11 @@ var require_execute3 = __commonJS({
           const legacy = this.legacyHousing && this.legacyHousing(sql, params, resource) || this.legacyInventory && this.legacyInventory(sql, params);
           if (legacy) {
             result = [await legacy, void 0];
+          } else if (hasNoBinds(params)) {
+            result = await this._query(pool, sql, params, typeCastExecute);
           } else if (this.statements.isPreparable(sql)) {
             try {
-              result = await (this._oxTypeCast ? pool.execute({ sql, values: params, typeCast: typeCastExecute }) : pool.execute(sql, params));
+              result = await this._execute(pool, sql, params);
               this.statements.recordHit(sql);
             } catch (err) {
               if (isUnpreparableError(err)) {
@@ -21263,7 +21506,7 @@ var require_execute3 = __commonJS({
     };
     __name(_Executor, "Executor");
     var Executor2 = _Executor;
-    module2.exports = { Executor: Executor2, normalizeParams, normalizeNamedPlaceholders, NULL_SENTINEL };
+    module2.exports = { Executor: Executor2, normalizeParams, normalizeNamedPlaceholders, runOnConnection, hasNoBinds, NULL_SENTINEL };
   }
 });
 
@@ -21360,7 +21603,7 @@ var require_legacy_housing = __commonJS({
     function touchesStockTables(sql) {
       if (typeof sql !== "string") return false;
       const code = sql.replace(/'(?:\\.|''|[^'\\])*'|"(?:\\.|""|[^"\\])*"|\/\*[\s\S]*?\*\/|--[^\n]*(?:\n|$)|#[^\n]*(?:\n|$)/g, " ");
-      return /\b(?:FROM|JOIN|UPDATE|INTO|TABLE)\s+(?:(?:`[^`]+`|[A-Za-z_][\w]*)\s*\.\s*)?(?:`(?:houselocations|player_houses)`|(?:houselocations|player_houses)\b)/i.test(code);
+      return /\b(?:houselocations|player_houses)\b/i.test(code);
     }
     __name(touchesStockTables, "touchesStockTables");
     function createLegacyHousingBridge2({ getState, request, onStop }) {
@@ -21480,14 +21723,16 @@ var require_batch = __commonJS({
         }
         return `${quoteIdent(column)} = CASE ${branches.join(" ")} ELSE ${quoteIdent(column)} END`;
       });
-      const where = [];
+      const composite = keyCols.length > 1;
+      const tuple = composite ? "(" + keyCols.map(() => "?").join(",") + ")" : "?";
+      const keyList = composite ? "(" + keyCols.map(quoteIdent).join(",") + ")" : quoteIdent(keyCols[0]);
       for (const row of effectiveRows) {
         const pkVals = Array.isArray(row.pk) ? row.pk : [row.pk];
-        where.push(`(${keyMatch()})`);
         for (const value of pkVals) params.push(value);
       }
+      const where = `${keyList} IN (${new Array(effectiveRows.length).fill(tuple).join(",")})`;
       return {
-        sql: `UPDATE ${quoteIdent(table)} SET ${assignments.join(", ")} WHERE ${where.join(" OR ")}`,
+        sql: `UPDATE ${quoteIdent(table)} SET ${assignments.join(", ")} WHERE ${where}`,
         params,
         rowCount: effectiveRows.length
       };
@@ -21506,21 +21751,132 @@ var require_batch = __commonJS({
   }
 });
 
+// server/js/ident.js
+var require_ident = __commonJS({
+  "server/js/ident.js"(exports2, module2) {
+    "use strict";
+    var IDENT = /^[A-Za-z0-9_]{1,64}$/;
+    function isIdent(value) {
+      return typeof value === "string" && IDENT.test(value);
+    }
+    __name(isIdent, "isIdent");
+    function assertIdent(value, what, prefix) {
+      if (!isIdent(value)) throw new Error(`${prefix || "qbsql"}: invalid ${what} '${value}'`);
+    }
+    __name(assertIdent, "assertIdent");
+    module2.exports = { IDENT, isIdent, assertIdent };
+  }
+});
+
 // server/js/queue.js
 var require_queue = __commonJS({
   "server/js/queue.js"(exports2, module2) {
     "use strict";
     var batch = require_batch();
     var log2 = require_logger();
+    var { isIdent } = require_ident();
     var NULL_SENTINEL = "\0qbsql:null\0";
     function normalizeWriteParams(params) {
       return Array.from(params, (value) => value === void 0 || value === NULL_SENTINEL ? null : value);
     }
     __name(normalizeWriteParams, "normalizeWriteParams");
+    function pkComponent(value) {
+      if (typeof value === "string") return value;
+      if (typeof value === "number") {
+        if (Number.isFinite(value)) return String(value);
+      } else if (typeof value === "bigint") {
+        return String(value);
+      } else if (typeof value === "boolean") {
+        return value ? "1" : "0";
+      }
+      throw new TypeError(`qbsql/queue: primary key values must be strings or finite numbers (got ${value === null ? "null" : typeof value === "number" ? String(value) : typeof value})`);
+    }
+    __name(pkComponent, "pkComponent");
     function pkKey(pk) {
-      return Array.isArray(pk) ? pk.map((v) => "" + v).join("") : String(pk);
+      return JSON.stringify(Array.isArray(pk) ? pk.map(pkComponent) : [pkComponent(pk)]);
     }
     __name(pkKey, "pkKey");
+    function deadLetterPk(pk) {
+      return Array.isArray(pk) ? JSON.stringify(pk) : String(pk);
+    }
+    __name(deadLetterPk, "deadLetterPk");
+    var DECIMAL = /^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/;
+    function accumulateValue(table, column, value) {
+      if (typeof value === "number" && Number.isFinite(value)) return value;
+      if (typeof value === "string" && DECIMAL.test(value)) {
+        const n = Number(value);
+        if (Number.isFinite(n)) return n;
+      }
+      throw new TypeError(`qbsql/queue: accumulate mode needs a finite number for ${table}.${column} (got ${typeof value === "string" ? `'${value.slice(0, 32)}'` : String(value)})`);
+    }
+    __name(accumulateValue, "accumulateValue");
+    var DETERMINISTIC_WRITE_ERRORS = /* @__PURE__ */ new Set([
+      "ER_BAD_FIELD_ERROR",
+      "ER_NO_SUCH_TABLE",
+      "ER_BAD_TABLE_ERROR",
+      "ER_PARSE_ERROR",
+      "ER_DATA_TOO_LONG",
+      "ER_TRUNCATED_WRONG_VALUE",
+      "ER_TRUNCATED_WRONG_VALUE_FOR_FIELD",
+      "ER_WARN_DATA_OUT_OF_RANGE",
+      "ER_DATA_OUT_OF_RANGE",
+      "WARN_DATA_TRUNCATED",
+      "ER_BAD_NULL_ERROR",
+      "ER_NO_DEFAULT_FOR_FIELD",
+      "ER_DUP_ENTRY",
+      "ER_NO_REFERENCED_ROW",
+      "ER_NO_REFERENCED_ROW_2",
+      "ER_ROW_IS_REFERENCED",
+      "ER_ROW_IS_REFERENCED_2",
+      "ER_CHECK_CONSTRAINT_VIOLATED",
+      "ER_CONSTRAINT_FAILED",
+      "ER_INVALID_JSON_TEXT",
+      "ER_INVALID_JSON_TEXT_IN_PARAM",
+      "ER_WRONG_VALUE_COUNT_ON_ROW",
+      "ER_WRONG_VALUE_FOR_TYPE",
+      "ER_NON_UNIQ_ERROR",
+      "ER_TABLEACCESS_DENIED_ERROR",
+      "ER_COLUMNACCESS_DENIED_ERROR"
+    ]);
+    function isRetryableWriteError(err) {
+      if (!err || err.fatal) return true;
+      return !DETERMINISTIC_WRITE_ERRORS.has(err.code);
+    }
+    __name(isRetryableWriteError, "isRetryableWriteError");
+    function sortableComponent(value) {
+      if (typeof value === "number") return value;
+      if (typeof value === "string" && /^-?\d{1,15}$/.test(value)) return Number(value);
+      return String(value);
+    }
+    __name(sortableComponent, "sortableComponent");
+    function comparePk(a, b) {
+      const pa = Array.isArray(a.pk) ? a.pk : [a.pk];
+      const pb = Array.isArray(b.pk) ? b.pk : [b.pk];
+      for (let i = 0; i < pa.length; i++) {
+        const x = sortableComponent(pa[i]);
+        const y = sortableComponent(pb[i]);
+        if (x === y) continue;
+        const xn = typeof x === "number", yn = typeof y === "number";
+        if (xn !== yn) return xn ? -1 : 1;
+        return x < y ? -1 : 1;
+      }
+      return 0;
+    }
+    __name(comparePk, "comparePk");
+    function hasUniqueIndexOn(rows, keyCols) {
+      const want = new Set(keyCols.map((c) => c.toLowerCase()));
+      const indexes = /* @__PURE__ */ new Map();
+      for (const row of rows || []) {
+        const name = row.INDEX_NAME;
+        if (!indexes.has(name)) indexes.set(name, /* @__PURE__ */ new Set());
+        indexes.get(name).add(String(row.COLUMN_NAME).toLowerCase());
+      }
+      for (const cols of indexes.values()) {
+        if (cols.size === want.size && [...want].every((c) => cols.has(c))) return true;
+      }
+      return false;
+    }
+    __name(hasUniqueIndexOn, "hasUniqueIndexOn");
     function colsEqual(a, b) {
       const ak = Object.keys(a);
       if (ak.length !== Object.keys(b).length) return false;
@@ -21540,6 +21896,12 @@ var require_queue = __commonJS({
         this.pendingRowCount = 0;
         this.timer = null;
         this.dialect = batch.dialectFor(pools.version);
+        this.verifiedKeys = /* @__PURE__ */ new Set();
+      }
+      // The flush writes on its own pool when one is configured, so ad-hoc
+      // writes and long transactions cannot starve the save path.
+      _pool() {
+        return this.pools.flush || this.pools.write;
       }
       _tableState(table, conflictKey, mode, writeMode) {
         let st = this.pending.get(table);
@@ -21563,41 +21925,118 @@ var require_queue = __commonJS({
           st.mode = mode;
           st.writeMode = writeMode;
         }
+        this._verifyConflictKey(table, conflictKey);
         return st;
       }
-      // Enqueue one row. Fire-and-forget: never returns a promise the caller
-      // waits on. `row` is { pk, cols }.
-      enqueue(table, conflictKey, row, opts) {
-        opts = opts || {};
+      // Warn (once per table and key) when the conflict key is not exactly a
+      // PRIMARY/UNIQUE index: ON DUPLICATE KEY UPDATE would then never fire and
+      // every flush would INSERT duplicate rows, and update mode would scan.
+      // Fire-and-forget so enqueue() stays synchronous.
+      _verifyConflictKey(table, keyCols) {
+        if (!this.cfg.verifyConflictKeys) return;
+        const id = `${table}|${keyCols.join(",")}`;
+        if (this.verifiedKeys.has(id)) return;
+        this.verifiedKeys.add(id);
+        const pool = this.pools.read || this.pools.write;
+        Promise.resolve().then(() => pool.query(
+          "SELECT INDEX_NAME, COLUMN_NAME FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND NON_UNIQUE = 0",
+          [table]
+        )).then(([rows]) => {
+          if (hasUniqueIndexOn(rows, keyCols)) return;
+          log2.warn(
+            "queue",
+            `conflict key (${keyCols.join(", ")}) on ${table} is not a PRIMARY or UNIQUE index: upserts will insert duplicate rows instead of updating, and update writes scan the table.`
+          );
+        }).catch((err) => log2.debug("queue", `could not verify the conflict key of ${table}: ${err.message}`));
+      }
+      // Validate a call's table, key and options. Returns the normalised key
+      // column list. Throws synchronously, before anything is queued.
+      _checkTarget(table, conflictKey, opts) {
+        if (!isIdent(table)) throw new TypeError(`qbsql/queue: invalid table name '${table}'`);
+        const keyCols = Array.isArray(conflictKey) ? conflictKey : [conflictKey];
+        if (keyCols.length === 0 || !keyCols.every(isIdent)) {
+          throw new TypeError(`qbsql/queue: invalid conflict key for ${table}`);
+        }
         const mode = opts.mode || "assign";
+        if (mode !== "assign" && mode !== "accumulate") throw new Error(`qbsql/queue: unsupported mode '${mode}'.`);
         const writeMode = opts.writeMode || "upsert";
         if (writeMode !== "upsert" && writeMode !== "update") {
           throw new Error(`qbsql/queue: unsupported writeMode '${writeMode}'.`);
         }
-        const st = this._tableState(table, conflictKey, mode, writeMode);
+        let allowed = null;
+        if (opts.allowedColumns !== void 0 && opts.allowedColumns !== null) {
+          if (!Array.isArray(opts.allowedColumns)) throw new TypeError("qbsql/queue: allowedColumns must be a list of column names");
+          allowed = new Set(opts.allowedColumns.map((c) => String(c).toLowerCase()));
+        }
+        return { keyCols, mode, writeMode, allowed };
+      }
+      // Validate one { pk, cols } row and return its merge key and a private copy
+      // of its columns. Column names are identifiers, never key columns, and
+      // (with opts.allowedColumns) only the columns the caller allowed.
+      _prepareRow(table, target, row) {
+        if (!row || typeof row !== "object" || !row.cols || typeof row.cols !== "object" || Array.isArray(row.cols)) {
+          throw new TypeError(`qbsql/queue: rows for ${table} must be { pk = ..., cols = { ... } }`);
+        }
+        const { keyCols, mode, allowed } = target;
+        if (Array.isArray(row.pk) ? row.pk.length !== keyCols.length : keyCols.length !== 1) {
+          throw new TypeError(`qbsql/queue: ${table} needs ${keyCols.length} primary key value(s) per row`);
+        }
         const key = pkKey(row.pk);
-        const existing = st.rows.get(key);
-        if (existing) {
-          if (mode === "accumulate") {
-            for (const c of Object.keys(row.cols)) {
-              existing.cols[c] = (existing.cols[c] || 0) + row.cols[c];
+        const keySet = new Set(keyCols.map((c) => c.toLowerCase()));
+        const cols = {};
+        const names = Object.keys(row.cols);
+        if (names.length === 0) throw new TypeError(`qbsql/queue: a row for ${table} has no columns to write`);
+        for (const name of names) {
+          if (!isIdent(name)) throw new TypeError(`qbsql/queue: invalid column name '${name}' for ${table}`);
+          const lower = name.toLowerCase();
+          if (keySet.has(lower)) throw new TypeError(`qbsql/queue: ${table}.${name} is a conflict key column and cannot be written`);
+          if (allowed && !allowed.has(lower)) throw new TypeError(`qbsql/queue: column ${table}.${name} is not in allowedColumns`);
+          cols[name] = mode === "accumulate" ? accumulateValue(table, name, row.cols[name]) : row.cols[name];
+        }
+        return { key, pk: row.pk, cols };
+      }
+      // Merge validated rows into the table's pending set.
+      _merge(table, target, prepared) {
+        const st = this._tableState(table, target.keyCols, target.mode, target.writeMode);
+        for (const row of prepared) {
+          const existing = st.rows.get(row.key);
+          if (existing) {
+            if (target.mode === "accumulate") {
+              for (const c of Object.keys(row.cols)) {
+                existing.cols[c] = (existing.cols[c] || 0) + row.cols[c];
+              }
+            } else {
+              Object.assign(existing.cols, row.cols);
             }
           } else {
-            Object.assign(existing.cols, row.cols);
+            st.rows.set(row.key, { pk: row.pk, cols: row.cols });
+            this.pendingRowCount++;
           }
-        } else {
-          st.rows.set(key, { pk: row.pk, cols: { ...row.cols } });
-          this.pendingRowCount++;
         }
+      }
+      // Enqueue one row. Fire-and-forget: never returns a promise the caller
+      // waits on. `row` is { pk, cols }. Invalid input throws synchronously and
+      // queues nothing.
+      enqueue(table, conflictKey, row, opts) {
+        opts = opts || {};
+        const target = this._checkTarget(table, conflictKey, opts);
+        this._merge(table, target, [this._prepareRow(table, target, row)]);
         this._scheduleOrTrip(opts.priority === "immediate" ? table : null);
       }
       // Enqueue many rows in one call -- the single-boundary-crossing path.
+      // Every row is validated before any is queued, so a bad row rejects the
+      // whole call instead of leaving half of it pending. Scheduling happens
+      // once, so an 'immediate' batch is one flush rather than one per row.
       enqueueMany(table, conflictKey, rows, opts) {
         opts = opts || {};
         this.stats.countCrossing();
-        for (const row of rows) {
-          this.enqueue(table, conflictKey, row, opts);
-        }
+        if (rows && !Array.isArray(rows) && typeof rows === "object" && Object.keys(rows).length === 0) rows = [];
+        if (!Array.isArray(rows)) throw new TypeError(`qbsql/queue: enqueueMany for ${table} needs a list of rows`);
+        const target = this._checkTarget(table, conflictKey, opts);
+        const prepared = rows.map((row) => this._prepareRow(table, target, row));
+        if (prepared.length === 0) return;
+        this._merge(table, target, prepared);
+        this._scheduleOrTrip(opts.priority === "immediate" ? table : null);
       }
       _scheduleOrTrip(immediateTable) {
         if (immediateTable) {
@@ -21670,6 +22109,7 @@ var require_queue = __commonJS({
           }
           const keyCount = Array.isArray(st.conflictKey) ? st.conflictKey.length : 1;
           for (const g of groups.values()) {
+            g.rows.sort(comparePk);
             const perRow = st.writeMode === "update" ? g.columns.length * (keyCount + 1) + keyCount : g.columns.length + keyCount;
             const perStatement = Math.min(
               this.cfg.maxRowsPerStatement,
@@ -21677,26 +22117,10 @@ var require_queue = __commonJS({
             );
             for (let i = 0; i < g.rows.length; i += perStatement) {
               const chunk = g.rows.slice(i, i + perStatement);
-              const builder = st.writeMode === "update" ? batch.buildUpdate : batch.build;
-              const { sql, params, rowCount } = builder(
-                table,
-                st.conflictKey,
-                g.columns,
-                chunk,
-                {
-                  mode: st.mode,
-                  dialect: this.dialect,
-                  // Padding must not push a wide chunk past the placeholder budget.
-                  pad: this.cfg.padToBuckets && st.mode === "assign" && batch.bucketFor(chunk.length) <= perStatement
-                }
-              );
-              try {
-                await this._writeWithRetry(table, sql, params, chunk, st.mode);
-                statements++;
-                rowsWritten += rowCount;
-              } catch (err) {
-                if (!firstError) firstError = err;
-              }
+              const result = await this._writeChunk(table, st, g.columns, chunk, perStatement);
+              statements += result.statements;
+              rowsWritten += result.rows;
+              if (result.error && !firstError) firstError = result.error;
             }
           }
           const ms = Number(process.hrtime.bigint() - started) / 1e6;
@@ -21707,6 +22131,56 @@ var require_queue = __commonJS({
           st.completedGeneration = st.generation;
           st.flushing = false;
         }
+      }
+      // Build and write one chunk. A deterministic failure (bad value, missing
+      // column, constraint) in a multi-row chunk is bisected so only the
+      // offending row(s) dead-letter instead of every row sharing the statement.
+      // Resolves to { statements, rows, error } and never rejects.
+      async _writeChunk(table, st, columns, chunk, perStatement) {
+        const builder = st.writeMode === "update" ? batch.buildUpdate : batch.build;
+        const { sql, params, rowCount } = builder(
+          table,
+          st.conflictKey,
+          columns,
+          chunk,
+          {
+            mode: st.mode,
+            dialect: this.dialect,
+            // Padding must not push a wide chunk past the placeholder budget.
+            pad: this.cfg.padToBuckets && st.mode === "assign" && batch.bucketFor(chunk.length) <= perStatement
+          }
+        );
+        try {
+          await this._writeWithRetry(table, sql, params, chunk, st.mode);
+          return { statements: 1, rows: rowCount, error: null };
+        } catch (err) {
+          if (!err.bisect) return { statements: 0, rows: 0, error: err };
+          const mid = Math.ceil(chunk.length / 2);
+          const out = { statements: 0, rows: 0, error: null };
+          for (const half of [chunk.slice(0, mid), chunk.slice(mid)]) {
+            const result = await this._writeChunk(table, st, columns, half, perStatement);
+            out.statements += result.statements;
+            out.rows += result.rows;
+            if (result.error && !out.error) out.error = result.error;
+          }
+          return out;
+        }
+      }
+      // Re-merge failed rows into the live pending set (see _writeWithRetry).
+      // Returns the map of hedge copies so a later outcome can clear them.
+      _hedge(table, chunk, reMerged) {
+        const st = this.pending.get(table);
+        for (const entry of chunk) {
+          const key = pkKey(entry.pk);
+          if (!st.rows.has(key)) {
+            const staleCols = { ...entry.cols };
+            st.rows.set(key, { pk: entry.pk, cols: { ...staleCols } });
+            this.pendingRowCount++;
+            if (!reMerged) reMerged = /* @__PURE__ */ new Map();
+            reMerged.set(key, staleCols);
+          }
+        }
+        return reMerged;
       }
       _clearReMerged(table, reMerged, mode) {
         if (!reMerged || !reMerged.size) return;
@@ -21735,10 +22209,25 @@ var require_queue = __commonJS({
       async _writeWithRetry(table, sql, params, chunk, mode, attempt, reMerged) {
         attempt = attempt || 0;
         try {
-          await this.pools.write.execute(sql, normalizeWriteParams(params));
+          await this._pool().execute(sql, normalizeWriteParams(params));
           this._clearReMerged(table, reMerged, mode);
         } catch (err) {
           this.stats.queue.retries++;
+          if (!isRetryableWriteError(err)) {
+            if (chunk.length > 1) {
+              this._clearReMerged(table, reMerged, mode);
+              const split = new Error(`qbsql: write to ${table} failed (${err.code}); bisecting ${chunk.length} rows`);
+              split.bisect = true;
+              split.cause = err;
+              throw split;
+            }
+            reMerged = this._hedge(table, chunk, reMerged);
+            log2.error("queue", `DEAD-LETTER on ${table} (1 row, ${err.code} is not retryable): ${err.message}`);
+            await this._deadLetter(table, chunk, err);
+            this.stats.queue.deadLettered += chunk.length;
+            this._clearReMerged(table, reMerged, mode);
+            throw new Error(`qbsql: write to ${table} failed (${err.code}); ${chunk.length} row(s) were dead-lettered`);
+          }
           if (attempt >= 5) {
             log2.error(
               "queue",
@@ -21749,17 +22238,7 @@ var require_queue = __commonJS({
             this._clearReMerged(table, reMerged, mode);
             throw new Error(`qbsql: write to ${table} failed after ${attempt} retries; ${chunk.length} row(s) were dead-lettered`);
           }
-          const st = this.pending.get(table);
-          for (const entry of chunk) {
-            const key = pkKey(entry.pk);
-            if (!st.rows.has(key)) {
-              const staleCols = { ...entry.cols };
-              st.rows.set(key, { pk: entry.pk, cols: { ...staleCols } });
-              this.pendingRowCount++;
-              if (!reMerged) reMerged = /* @__PURE__ */ new Map();
-              reMerged.set(key, staleCols);
-            }
-          }
+          reMerged = this._hedge(table, chunk, reMerged);
           const backoff = Math.min(2e3, 50 * Math.pow(2, attempt));
           log2.warn("queue", `write failed on ${table} (attempt ${attempt + 1}), retrying in ${backoff}ms: ${err.message}`);
           await new Promise((r) => setTimeout(r, backoff));
@@ -21767,12 +22246,23 @@ var require_queue = __commonJS({
         }
       }
       async _deadLetter(table, chunk, err) {
-        const sql = "INSERT INTO `kora_sql_deadletter` (`table_name`,`pk`,`cols_json`,`error`,`failed_at`) VALUES (?,?,?,?,NOW())";
-        const failures = [];
-        for (const entry of chunk) {
-          const pk = Array.isArray(entry.pk) ? entry.pk.join("") : String(entry.pk);
+        const head = "INSERT INTO `kora_sql_deadletter` (`table_name`,`pk`,`cols_json`,`error`,`failed_at`) VALUES ";
+        const group = "(?,?,?,?,NOW())";
+        const message = String(err && err.message).slice(0, 500);
+        const rows = chunk.map((entry) => [table, deadLetterPk(entry.pk), JSON.stringify(entry.cols), message]);
+        if (rows.length > 1) {
           try {
-            await this.pools.write.execute(sql, [table, pk, JSON.stringify(entry.cols), String(err.message).slice(0, 500)]);
+            await this._pool().execute(head + rows.map(() => group).join(","), rows.flat());
+            return;
+          } catch (e) {
+            log2.warn("queue", `multi-row dead-letter insert for ${table} failed (${e.message}); retrying row by row`);
+          }
+        }
+        const failures = [];
+        for (const values of rows) {
+          const pk = values[1];
+          try {
+            await this._pool().execute(head + group, values);
           } catch (e) {
             log2.error("queue", `dead-letter insert itself failed for ${table}/${pk}: ${e.message}`);
             failures.push(`${pk}: ${e.message}`);
@@ -21792,7 +22282,7 @@ var require_queue = __commonJS({
     };
     __name(_WriteQueue, "WriteQueue");
     var WriteQueue2 = _WriteQueue;
-    module2.exports = { WriteQueue: WriteQueue2, pkKey };
+    module2.exports = { WriteQueue: WriteQueue2, pkKey, comparePk, hasUniqueIndexOn, isRetryableWriteError };
   }
 });
 
@@ -21800,11 +22290,36 @@ var require_queue = __commonJS({
 var require_transaction = __commonJS({
   "server/js/transaction.js"(exports2, module2) {
     "use strict";
-    var { normalizeParams, normalizeNamedPlaceholders } = require_execute3();
+    var { normalizeParams, normalizeNamedPlaceholders, runOnConnection } = require_execute3();
     var _TransactionRunner = class _TransactionRunner {
-      constructor(pools) {
+      // opts.statements: the shared StatementCache (unpreparable marks).
+      // opts.maxStartTransactions: concurrent startTransaction callbacks allowed
+      // to pin a write connection; later callers wait for a slot.
+      constructor(pools, opts = {}) {
         this.pools = pools;
+        this.statements = opts.statements || null;
         this.checkedInFlight = /* @__PURE__ */ new Map();
+        this.startLimit = opts.maxStartTransactions > 0 ? opts.maxStartTransactions : Infinity;
+        this.startActive = 0;
+        this.startWaiters = [];
+      }
+      _run(conn, st) {
+        return runOnConnection(conn, st.sql, st.params, this.statements);
+      }
+      // A slot-limited semaphore for startTransaction: each callback can hold a
+      // write connection for up to 30 s, so an unbounded number of them could
+      // occupy the whole write pool.
+      _acquireStartSlot() {
+        if (this.startActive < this.startLimit) {
+          this.startActive++;
+          return Promise.resolve();
+        }
+        return new Promise((resolve) => this.startWaiters.push(resolve));
+      }
+      _releaseStartSlot() {
+        const next = this.startWaiters.shift();
+        if (next) next();
+        else this.startActive--;
       }
       // Expected row counts are business preconditions, not merely SQL success.
       transactionChecked(queries, operation) {
@@ -21867,8 +22382,7 @@ var require_transaction = __commonJS({
         try {
           await conn.beginTransaction();
           for (; index < statements.length; index++) {
-            const st = statements[index];
-            const [result] = await conn.query(st.sql, st.params);
+            const [result] = await this._run(conn, statements[index]);
             const count = Array.isArray(result) ? result.length : result.affectedRows;
             if (queries[index].expectedRows !== void 0 && count !== queries[index].expectedRows) {
               const err = new Error("Transaction precondition changed");
@@ -21900,8 +22414,8 @@ var require_transaction = __commonJS({
       }
       // Normalise oxmysql's two argument shapes into an array of {sql, params}.
       //
-      // These run through conn.execute() on a pinned connection rather than the
-      // Executor, so normalizeParams has to be applied here too -- otherwise a
+      // These run on a pinned connection rather than through the Executor, so
+      // normalizeParams has to be applied here too -- otherwise a
       // holed Lua param array reaches mysql2 as undefined inside a transaction,
       // where the failure also rolls back every sibling statement.
       _normalise(queries, maybeParams) {
@@ -21940,7 +22454,7 @@ var require_transaction = __commonJS({
         try {
           await conn.beginTransaction();
           for (const st of statements) {
-            await conn.query(st.sql, st.params);
+            await this._run(conn, st);
           }
           await conn.commit();
           return true;
@@ -21972,6 +22486,14 @@ var require_transaction = __commonJS({
       // matches oxmysql and prevents a leaked callback from pinning a pool slot.
       async startTransaction(callback) {
         if (typeof callback !== "function") throw new TypeError("startTransaction requires a callback");
+        await this._acquireStartSlot();
+        try {
+          return await this._startTransaction(callback);
+        } finally {
+          this._releaseStartSlot();
+        }
+      }
+      async _startTransaction(callback) {
         const conn = await this.pools.write.getConnection();
         let closed = false;
         let discard = false;
@@ -21991,7 +22513,7 @@ var require_transaction = __commonJS({
             if (closed) throw new Error("Connection used by transaction timed out after 30 seconds.");
             const normalized = normalizeNamedPlaceholders(sql, params);
             const [result] = await Promise.race([
-              conn.query(normalized.sql, normalizeParams(normalized.params)),
+              this._run(conn, { sql: normalized.sql, params: normalizeParams(normalized.params) }),
               deadline
             ]);
             if (closed) throw new Error("Connection used by transaction timed out after 30 seconds.");
@@ -22036,7 +22558,7 @@ var require_transaction = __commonJS({
         const results = [];
         try {
           for (const st of statements) {
-            const [r] = await conn.execute(st.sql, st.params);
+            const [r] = await this._run(conn, st);
             results.push(r);
           }
           return results;
@@ -22176,8 +22698,8 @@ var require_schema = __commonJS({
     "use strict";
     var { escape } = require_mysql2();
     var log2 = require_logger();
+    var { IDENT } = require_ident();
     var NULL_SENTINEL = "\0qbsql:null\0";
-    var IDENT = /^[A-Za-z0-9_]{1,64}$/;
     var BASE_TYPE = /^(?:(?:tiny|small|medium|big)?int(?:\(\d{1,2}\))?|integer|decimal\(\d{1,2}(?:,\d{1,2})?\)|numeric\(\d{1,2}(?:,\d{1,2})?\)|float|double|(?:var)?char\(\d{1,5}\)|(?:var)?binary\(\d{1,5}\)|tinytext|text|mediumtext|longtext|tinyblob|blob|mediumblob|longblob|json|date|time(?:\(\d\))?|datetime(?:\(\d\))?|timestamp(?:\(\d\))?|year|boolean|bool|enum|set)$/i;
     var RAW_DEFAULT = /^(?:CURRENT_TIMESTAMP|NOW|LOCALTIMESTAMP)(?:\(\d?\))?$/i;
     var EXPRESSION_BANNED = /;|--|\/\*|\*\//;
@@ -22310,6 +22832,53 @@ var require_schema = __commonJS({
       return want === got || want === "json" && got === "longtext";
     }
     __name(typeMatches, "typeMatches");
+    var INT_RANK = { tinyint: 1, smallint: 2, mediumint: 3, int: 4, bigint: 5 };
+    var TEXT_RANK = { tinytext: 1, text: 2, mediumtext: 3, longtext: 4 };
+    var BLOB_RANK = { tinyblob: 1, blob: 2, mediumblob: 3, longblob: 4 };
+    function parseColumnType(type) {
+      const t = normaliseType(type);
+      const unsigned = /\bunsigned\b/.test(t);
+      const zerofill = /\bzerofill\b/.test(t);
+      const m = t.replace(/\s+(?:unsigned|zerofill)\b/g, "").trim().match(/^([a-z]+)(?:\((.*)\))?$/);
+      return m ? { name: m[1], args: m[2], unsigned, zerofill } : null;
+    }
+    __name(parseColumnType, "parseColumnType");
+    function enumValues(args) {
+      const out = [];
+      const re = /'((?:[^'\\]|\\.|'')*)'/g;
+      let m;
+      while (m = re.exec(args || "")) out.push(m[1].replace(/''/g, "'").replace(/\\(.)/g, "$1"));
+      return out;
+    }
+    __name(enumValues, "enumValues");
+    function isWidening(got, want) {
+      if (got === want) return true;
+      const a = parseColumnType(got);
+      const b = parseColumnType(want);
+      if (!a || !b || a.zerofill !== b.zerofill || a.unsigned !== b.unsigned) return false;
+      if (a.name in INT_RANK && b.name in INT_RANK) return INT_RANK[b.name] >= INT_RANK[a.name];
+      if (["char", "varchar", "binary", "varbinary"].includes(a.name)) {
+        const sameFamily = a.name === b.name || a.name === "char" && b.name === "varchar" || a.name === "binary" && b.name === "varbinary";
+        return sameFamily && Number(b.args) >= Number(a.args);
+      }
+      if (a.name in TEXT_RANK && b.name in TEXT_RANK) return TEXT_RANK[b.name] >= TEXT_RANK[a.name];
+      if (a.name in BLOB_RANK && b.name in BLOB_RANK) return BLOB_RANK[b.name] >= BLOB_RANK[a.name];
+      if (["decimal", "numeric"].includes(a.name) && ["decimal", "numeric"].includes(b.name)) {
+        const [ap, as = 0] = String(a.args || "10,0").split(",").map(Number);
+        const [bp, bs = 0] = String(b.args || "10,0").split(",").map(Number);
+        return bs >= as && bp - bs >= ap - as;
+      }
+      if (a.name === "float" && b.name === "double") return true;
+      if ((a.name === "enum" || a.name === "set") && b.name === a.name) {
+        const have = enumValues(b.args);
+        return enumValues(a.args).every((v) => have.includes(v));
+      }
+      if (["datetime", "timestamp", "time"].includes(a.name) && b.name === a.name) {
+        return Number(b.args || 0) >= Number(a.args || 0);
+      }
+      return false;
+    }
+    __name(isWidening, "isWidening");
     function columnDefinition(col, spec) {
       const parts = [q(col.name), col.type.toLowerCase() === "enum" || col.type.toLowerCase() === "set" ? `${col.type.toLowerCase()}(${col.values.map((v) => escape(v)).join(",")})` : col.type.toLowerCase()];
       if (col.unsigned) parts.push("UNSIGNED");
@@ -22354,8 +22923,10 @@ var require_schema = __commonJS({
       return sql;
     }
     __name(buildCreate, "buildCreate");
-    function diff(spec, actual) {
+    function diff(spec, actual, opts = {}) {
+      const allowModify = opts.allowModify !== false;
       const statements = [];
+      const modifies = [];
       const added = { columns: [], modified: [], indexes: [], foreign: [], checks: [] };
       const warnings = [];
       const alter = /* @__PURE__ */ __name((clause) => `ALTER TABLE ${q(spec.name)} ${clause}`, "alter");
@@ -22373,8 +22944,15 @@ var require_schema = __commonJS({
         const typeDiffers = !typeMatches(want, got);
         const nullDiffers = !col.generated && wantNull !== (existing.IS_NULLABLE === "YES");
         if (col.modify === true && !col.generated && (typeDiffers || nullDiffers)) {
-          statements.push(alter(`MODIFY COLUMN ${columnDefinition(col, spec)}`));
-          added.modified.push(col.name);
+          const refused = !allowModify ? "modify is disabled by kora_sql_schema_allow_modify" : spec.extend ? "an extend table never modifies existing columns" : typeDiffers && !isWidening(got, want) ? "only widening type changes are applied" : nullDiffers && !wantNull ? "NULL to NOT NULL is not applied" : null;
+          if (!refused) {
+            const statement = alter(`MODIFY COLUMN ${columnDefinition(col, spec)}`);
+            statements.push(statement);
+            modifies.push({ column: col.name, statement });
+            added.modified.push(col.name);
+            continue;
+          }
+          warnings.push(`${spec.name}.${col.name}: modify refused (${refused}); type is '${existing.COLUMN_TYPE}'${existing.IS_NULLABLE === "YES" ? " NULL" : ""}, schema expects '${want}'${wantNull ? " NULL" : ""} (not altered)`);
           continue;
         }
         if (typeDiffers) warnings.push(`${spec.name}.${col.name}: type is '${existing.COLUMN_TYPE}', schema expects '${want}' (not altered)`);
@@ -22406,7 +22984,7 @@ var require_schema = __commonJS({
         statements.push(alter(`ADD ${checkDefinition(check)}`));
         added.checks.push(check.name);
       }
-      return { statements, added, warnings };
+      return { statements, modifies, added, warnings };
     }
     __name(diff, "diff");
     function buildSeed(spec) {
@@ -22432,10 +23010,48 @@ var require_schema = __commonJS({
     __name(buildSeed, "buildSeed");
     var ddl = /* @__PURE__ */ __name((sql) => ({ sql, namedPlaceholders: false }), "ddl");
     var _SchemaManager = class _SchemaManager {
+      // defaults: { createCollate, allowModify (default true), ownersTable }.
+      // Without an ownersTable no resource owns anything, so `modify` is refused.
       constructor(pools, defaults = {}) {
         this.pools = pools;
         this.defaults = defaults;
+        this.allowModify = defaults.allowModify !== false;
+        this.ownersTable = defaults.ownersTable || null;
         this._tails = /* @__PURE__ */ new Map();
+      }
+      // information_schema reads go to the read pool, off the write pool the
+      // flush and transactions use.
+      _readPool() {
+        return this.pools.read || this.pools.write;
+      }
+      // Record the creator of a table. Best effort: a failure only means
+      // nobody can `modify` that table later.
+      async _recordOwner(table, resource) {
+        if (!this.ownersTable || !resource) return;
+        try {
+          await this.pools.write.query(
+            `INSERT IGNORE INTO ${q(this.ownersTable)} (\`table_name\`, \`resource\`) VALUES (?, ?)`,
+            [table, resource]
+          );
+        } catch (err) {
+          log2.debug("schema", `could not record the owner of ${table}: ${err.message}`);
+        }
+      }
+      // True when `resource` owns `table`. A table with no recorded owner (it
+      // predates ownership tracking) is claimed by the first resource that asks.
+      async _owns(table, resource) {
+        if (!this.ownersTable || !resource) return false;
+        try {
+          await this._recordOwner(table, resource);
+          const [rows] = await this.pools.write.query(
+            `SELECT \`resource\` FROM ${q(this.ownersTable)} WHERE \`table_name\` = ?`,
+            [table]
+          );
+          return Array.isArray(rows) && rows.length > 0 && rows[0].resource === resource;
+        } catch (err) {
+          log2.warn("schema", `could not check the owner of ${table}: ${err.message}`);
+          return false;
+        }
       }
       // Serialise work per table so two resources racing on the same table do not interleave DDL.
       _serial(name, fn) {
@@ -22446,7 +23062,7 @@ var require_schema = __commonJS({
         return run;
       }
       async _inspect(name) {
-        const db = this.pools.write;
+        const db = this._readPool();
         const [tables] = await db.query(
           "SELECT 1 FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?",
           [name]
@@ -22482,8 +23098,17 @@ var require_schema = __commonJS({
             await this.pools.write.query(ddl(buildCreate(spec)));
             report.created = true;
             log2.info("schema", `${resource || "unknown"}: created table ${spec.name}`);
+            await this._recordOwner(spec.name, resource);
           } else {
-            const result = diff(spec, actual);
+            const result = diff(spec, actual, { allowModify: this.allowModify });
+            if (result.modifies.length > 0 && !await this._owns(spec.name, resource)) {
+              const withheld = new Set(result.modifies.map((m) => m.statement));
+              result.statements = result.statements.filter((s) => !withheld.has(s));
+              for (const m of result.modifies) {
+                result.warnings.push(`${spec.name}.${m.column}: modify refused (${resource || "the caller"} does not own ${spec.name}) (not altered)`);
+              }
+              result.added.modified = [];
+            }
             for (const stmt of result.statements) await this.pools.write.query(ddl(stmt));
             report.added_columns = result.added.columns;
             report.modified_columns = result.added.modified;
@@ -22515,7 +23140,7 @@ var require_schema = __commonJS({
         const deadline = Date.now() + (Number(timeoutMs) > 0 ? Number(timeoutMs) : 6e4);
         const unique = [...new Set(names)];
         for (; ; ) {
-          const [rows] = await this.pools.write.query(
+          const [rows] = await this._readPool().query(
             "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN (?)",
             [unique]
           );
@@ -22536,7 +23161,7 @@ var require_schema = __commonJS({
     };
     __name(_SchemaManager, "SchemaManager");
     var SchemaManager2 = _SchemaManager;
-    module2.exports = { SchemaManager: SchemaManager2, validateSpec, buildCreate, buildSeed, diff, NULL_SENTINEL };
+    module2.exports = { SchemaManager: SchemaManager2, validateSpec, buildCreate, buildSeed, diff, isWidening, NULL_SENTINEL };
   }
 });
 
@@ -22554,8 +23179,28 @@ var require_exports = __commonJS({
       }
     }
     __name(reply, "reply");
-    function register2(api2, exports3) {
+    function register2(api2, exports3, opts = {}) {
       if (typeof exports3 !== "function") throw new Error("qbsql/exports: registrar not supplied");
+      const getInvoker = opts.getInvokingResource || (typeof globalThis.GetInvokingResource === "function" ? () => globalThis.GetInvokingResource() : null);
+      const self2 = opts.currentResource || (typeof globalThis.GetCurrentResourceName === "function" ? globalThis.GetCurrentResourceName() : null);
+      const warnedClaims = /* @__PURE__ */ new Set();
+      function verifiedCaller(claimed) {
+        if (!getInvoker) return claimed;
+        let invoker = null;
+        try {
+          invoker = getInvoker();
+        } catch (_) {
+        }
+        if (!invoker || invoker === self2) return claimed;
+        if (typeof claimed === "string" && claimed !== invoker && !warnedClaims.has(invoker)) {
+          warnedClaims.add(invoker);
+          log2.warn("exports", `${invoker} passed '${claimed}' as its resource name; using the real caller '${invoker}'`);
+        }
+        return invoker;
+      }
+      __name(verifiedCaller, "verifiedCaller");
+      const PRE_READY_ENQUEUE_LIMIT = 1e5;
+      let preReadyEnqueues = 0;
       function dataExport(name, impl) {
         const exported = /* @__PURE__ */ __name(function(...args) {
           let cb = null, resource = null;
@@ -22575,6 +23220,7 @@ var require_exports = __commonJS({
             }
             break;
           }
+          resource = verifiedCaller(resource);
           const p = Promise.resolve().then(() => api2.ready()).then(() => impl(...args, resource)).then((res) => {
             reply(name, cb, res, null);
             return res;
@@ -22615,7 +23261,13 @@ var require_exports = __commonJS({
           impl();
           return;
         }
-        api2.ready().then(impl).catch((err) => log2.error("exports", `${name} failed before qbsql became ready: ${err.message}`));
+        if (preReadyEnqueues >= PRE_READY_ENQUEUE_LIMIT) {
+          throw new Error(`qbsql: ${name} refused: ${PRE_READY_ENQUEUE_LIMIT} writes are already waiting for the database to become ready`);
+        }
+        preReadyEnqueues++;
+        api2.ready().then(impl).catch((err) => log2.error("exports", `${name} failed before qbsql became ready: ${err.message}`)).finally(() => {
+          preReadyEnqueues--;
+        });
       }
       __name(enqueueWhenReady, "enqueueWhenReady");
       const isReady = /* @__PURE__ */ __name(() => api2.isReady(), "isReady");
@@ -22684,6 +23336,7 @@ var require_exports = __commonJS({
       });
       oxAsync("rawExecute", oxRawExecute);
       const startTransaction = /* @__PURE__ */ __name(function(callback, resource) {
+        resource = verifiedCaller(typeof resource === "string" ? resource : null);
         const p = Promise.resolve().then(() => api2.ready()).then(() => api2.txn.startTransaction(callback, resource));
         p.catch(() => {
         });
@@ -22691,14 +23344,14 @@ var require_exports = __commonJS({
       }, "startTransaction");
       exports3("startTransaction", startTransaction);
       provideForeign("oxmysql", "startTransaction_async", startTransaction);
-      exports3("enqueue", (table, key, row, opts) => {
-        enqueueWhenReady("enqueue", () => api2.queue.enqueue(table, key, row, opts));
+      exports3("enqueue", (table, key, row, opts2) => {
+        enqueueWhenReady("enqueue", () => api2.queue.enqueue(table, key, row, opts2));
       });
-      exports3("enqueueMany", (table, key, rows, opts) => {
-        enqueueWhenReady("enqueueMany", () => api2.queue.enqueueMany(table, key, rows, opts));
+      exports3("enqueueMany", (table, key, rows, opts2) => {
+        enqueueWhenReady("enqueueMany", () => api2.queue.enqueueMany(table, key, rows, opts2));
       });
-      dataExport("upsert", (table, key, rows, opts, resource) => {
-        api2.queue.enqueueMany(table, key, rows, Object.assign({}, opts, { priority: "normal" }));
+      dataExport("upsert", (table, key, rows, opts2, resource) => {
+        api2.queue.enqueueMany(table, key, rows, Object.assign({}, opts2, { priority: "normal" }));
         return api2.queue.flush(table).then(() => rows.length);
       });
       exports3("flush", function(table, cb) {
@@ -22809,6 +23462,15 @@ var DEADLETTER_TABLE = {
   primary: ["id"],
   indexes: [{ name: "idx_deadletter_table", columns: ["table_name"] }]
 };
+var SCHEMA_OWNERS_TABLE = {
+  name: "kora_sql_schema_owners",
+  columns: [
+    { name: "table_name", type: "varchar(64)" },
+    { name: "resource", type: "varchar(64)" },
+    { name: "claimed_at", type: "timestamp", default: { raw: "CURRENT_TIMESTAMP" } }
+  ],
+  primary: ["table_name"]
+};
 var { register } = require_exports();
 var { connectWithRetry } = require_startup();
 var log = require_logger();
@@ -22868,7 +23530,7 @@ async function boot() {
   const cfg = cfgLoader.load();
   api.cfg = cfg;
   api.statements = new StatementCache(cfg.statementCache);
-  api.stats = new Stats(cfg.slowThreshold, cfg.slowRing);
+  api.stats = new Stats(cfg.slowThreshold, cfg.slowRing, cfg.statsMaxFingerprints);
   const pools = await connectWithRetry(poolBuilder.build, cfg, {
     retryInterval: cfg.connectRetryInterval,
     shouldStop: /* @__PURE__ */ __name(() => stopping, "shouldStop"),
@@ -22880,7 +23542,7 @@ async function boot() {
     }, "onRetry")
   });
   if (stopping) {
-    await Promise.allSettled([pools.read.end(), pools.write.end()]);
+    await Promise.allSettled(poolBuilder.all(pools).map((pool) => pool.end()));
     const stopped = new Error("qbsql stopped while waiting for the database");
     stopped.code = "QBSQL_STOPPING";
     throw stopped;
@@ -22897,10 +23559,18 @@ async function boot() {
     onStop: /* @__PURE__ */ __name((callback) => on("onResourceStop", callback), "onStop")
   });
   api.executor = new Executor(pools, api.statements, api.stats, legacyInventory, legacyHousing);
+  api.executor.readTimeout = cfg.queryTimeout;
   api.queue = new WriteQueue(api.executor, pools, api.stats, cfg);
-  api.txn = new TransactionRunner(pools);
-  api.schema = new SchemaManager(pools, { createCollate: cfg.defaultCollate });
-  await connectWithRetry(() => api.schema.ensureTable(DEADLETTER_TABLE, "kora_sql"), cfg, {
+  api.txn = new TransactionRunner(pools, { statements: api.statements, maxStartTransactions: cfg.maxStartTransactions });
+  api.schema = new SchemaManager(pools, {
+    createCollate: cfg.defaultCollate,
+    allowModify: cfg.schemaAllowModify,
+    ownersTable: SCHEMA_OWNERS_TABLE.name
+  });
+  await connectWithRetry(async () => {
+    await api.schema.ensureTable(SCHEMA_OWNERS_TABLE, "kora_sql");
+    await api.schema.ensureTable(DEADLETTER_TABLE, "kora_sql");
+  }, cfg, {
     retryInterval: cfg.connectRetryInterval,
     shouldStop: /* @__PURE__ */ __name(() => stopping, "shouldStop"),
     onRetry: /* @__PURE__ */ __name((err, attempt, retryInterval) => {
@@ -22931,5 +23601,5 @@ on("onResourceStop", (resourceName) => {
   stopping = true;
   const pools = api.pools;
   const drained = api.queue ? api.queue.flush().catch((e) => log.error("index", `stop-flush failed: ${e.message}`)) : Promise.resolve();
-  if (pools) drained.finally(() => Promise.allSettled([pools.read.end(), pools.write.end()]));
+  if (pools) drained.finally(() => Promise.allSettled(poolBuilder.all(pools).map((pool) => pool.end())));
 });

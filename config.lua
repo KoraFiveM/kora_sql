@@ -14,7 +14,7 @@ Config.compat = {
 }
 
 Config.sql = {
-    awaitTimeout = 30000,      -- ms Kora.sql.* waits for a query before rejecting
+    awaitTimeout = 30000,      -- ms Kora.sql.* waits before returning an error; read from the CALLING resource's Config.sql (see docs.md)
     readyTimeout = 60000,      -- ms Kora.sql.ready() waits for the pool before giving up
 }
 
@@ -33,6 +33,6 @@ Config = Kora.config.adopt(Config, { descriptions = {
     ['compat.ghmattimysql'] = 'Allow scripts using ghmattimysql database exports to use kora_sql.',
     ['compat.installMySQLGlobal'] = 'Retained compatibility preference. The current MySQL include installs its global without reading this setting.',
     ['compat.warnOnSync'] = 'Log a warning once per calling resource when it uses an oxmysql blocking call.',
-    ['sql.awaitTimeout'] = 'Retained query timeout preference. The current database query helper does not read this setting.',
+    ['sql.awaitTimeout'] = 'How long the SQL include waits for an answer before returning an error, read from each calling resource\'s own Config.sql.awaitTimeout (unset = wait for the answer). Editing kora_sql here does not change other resources. Server-side read limits are the kora_sql_query_timeout convar.',
     ['sql.readyTimeout'] = 'Readiness wait used by the SQL include in its calling resource. Editing kora_sql here does not change other resources that have their own Config table.',
 } })

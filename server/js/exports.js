@@ -40,10 +40,42 @@ function reply(name, cb, ...args) {
 //     (FiveM marshals a resolved promise back to a Citizen.Await on the Lua side)
 // The last argument is treated as `invokingResource` when it is a string, and as
 // a callback when it is callable.
-function register(api, exports) {
+//
+// CALLER IDENTITY. The trailing resource string is only a claim. It is honoured
+// when kora_sql itself made the call (its Lua compat shims capture the real
+// caller with GetInvokingResource() and forward it); for any other caller the
+// identity is GetInvokingResource() here, so a resource cannot pass
+// 'kora_housing' to skip the housing guard or misattribute its slow queries.
+// `opts` lets tests inject the two natives.
+function register(api, exports, opts = {}) {
     // `exports` here is the citizen registrar injected by index.js (the entry
     // file), NOT this module's module.exports -- see the header note.
     if (typeof exports !== 'function') throw new Error('qbsql/exports: registrar not supplied');
+
+    const getInvoker = opts.getInvokingResource
+        || (typeof globalThis.GetInvokingResource === 'function' ? () => globalThis.GetInvokingResource() : null);
+    const self = opts.currentResource
+        || (typeof globalThis.GetCurrentResourceName === 'function' ? globalThis.GetCurrentResourceName() : null);
+    const warnedClaims = new Set();
+    // Must run synchronously inside the export call: GetInvokingResource() is
+    // only meaningful while the cross-resource call is on the stack.
+    function verifiedCaller(claimed) {
+        if (!getInvoker) return claimed;
+        let invoker = null;
+        try { invoker = getInvoker(); } catch (_) { /* outside an export call */ }
+        if (!invoker || invoker === self) return claimed;
+        if (typeof claimed === 'string' && claimed !== invoker && !warnedClaims.has(invoker)) {
+            warnedClaims.add(invoker);
+            log.warn('exports', `${invoker} passed '${claimed}' as its resource name; using the real caller '${invoker}'`);
+        }
+        return invoker;
+    }
+
+    // Data calls received before boot completes wait on the ready promise. Cap
+    // the retained fire-and-forget enqueues so a database that never comes up
+    // cannot grow memory without bound.
+    const PRE_READY_ENQUEUE_LIMIT = 100000;
+    let preReadyEnqueues = 0;
     // A data call: (sql, params, [cb], [resource]) in any trailing combination.
     function dataExport(name, impl) {
         const exported = function (...args) {
@@ -63,6 +95,7 @@ function register(api, exports) {
                 }
                 break;
             }
+            resource = verifiedCaller(resource);
             // Export registration happens before the asynchronous pool boot
             // completes. Compatibility consumers commonly issue their first
             // query while their own server script is loading, so every data
@@ -128,9 +161,14 @@ function register(api, exports) {
             impl();
             return;
         }
+        if (preReadyEnqueues >= PRE_READY_ENQUEUE_LIMIT) {
+            throw new Error(`qbsql: ${name} refused: ${PRE_READY_ENQUEUE_LIMIT} writes are already waiting for the database to become ready`);
+        }
+        preReadyEnqueues++;
         api.ready()
             .then(impl)
-            .catch((err) => log.error('exports', `${name} failed before qbsql became ready: ${err.message}`));
+            .catch((err) => log.error('exports', `${name} failed before qbsql became ready: ${err.message}`))
+            .finally(() => { preReadyEnqueues--; });
     }
 
     const isReady = () => api.isReady();
@@ -215,6 +253,7 @@ function register(api, exports) {
     oxAsync('rawExecute', oxRawExecute);
 
     const startTransaction = function (callback, resource) {
+        resource = verifiedCaller(typeof resource === 'string' ? resource : null);
         const p = Promise.resolve()
             .then(() => api.ready())
             .then(() => api.txn.startTransaction(callback, resource));

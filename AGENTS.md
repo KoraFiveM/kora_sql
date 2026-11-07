@@ -15,6 +15,8 @@ with `oxmysql`, `mysql-async`, and `ghmattimysql`. The performance thesis is
 2. **Split read/write pools** (`server/js/pool.js`). Writes serialise on InnoDB
    row locks anyway; a burst of slow SELECTs on a shared pool would starve the
    save flush. Two pools over one DSN make flush latency independent of read load.
+   A third small pool (`kora_sql_flush_pool_size`, default 4) carries only the
+   queue flush, so transactions and ad-hoc writes cannot starve it either.
 3. **Write coalescing** (`server/js/queue.js`). The main event. Callers enqueue
    per-row writes; the queue merges them **by primary key** and, at flush time,
    groups rows by column signature and emits one batched
@@ -94,7 +96,7 @@ variants (`oxQuery`, `oxSingle`, `oxScalar`, `oxInsert`, `oxUpdate`, `oxPrepare`
 The first `*Sync` use per calling resource prints once, naming the resource.
 
 ## Schema
-There is no migration runner. Resources declare tables in Lua and `Kora.sql.ensureTable(s)` (`server/js/schema.js`) creates missing tables and only adds missing columns, indexes, foreign keys and checks; it never alters or drops. `kora_sql_deadletter` is created the same way at boot.
+There is no migration runner. Resources declare tables in Lua and `Kora.sql.ensureTable(s)` (`server/js/schema.js`) creates missing tables and only adds missing columns, indexes, foreign keys and checks; it never drops, and alters an existing column only for a `modify = true` column whose change widens it, requested by the table's owner (`kora_sql_schema_owners`). `kora_sql_schema_owners` and `kora_sql_deadletter` are created the same way at boot.
 
 ## Build and distribution
 Like oxmysql, kora_sql ships one server bundle containing mysql2. Run `yarn build`

@@ -33,6 +33,16 @@ const DEADLETTER_TABLE = {
     primary: ['id'],
     indexes: [{ name: 'idx_deadletter_table', columns: ['table_name'] }],
 };
+// Which resource created (and may `modify`) each ensureTable table; see schema.js.
+const SCHEMA_OWNERS_TABLE = {
+    name: 'kora_sql_schema_owners',
+    columns: [
+        { name: 'table_name', type: 'varchar(64)' },
+        { name: 'resource', type: 'varchar(64)' },
+        { name: 'claimed_at', type: 'timestamp', default: { raw: 'CURRENT_TIMESTAMP' } },
+    ],
+    primary: ['table_name'],
+};
 const { register } = require('./exports');
 const { connectWithRetry } = require('./startup');
 const log = require('./logger');
@@ -92,7 +102,7 @@ async function boot() {
     const cfg = cfgLoader.load();
     api.cfg = cfg;
     api.statements = new StatementCache(cfg.statementCache);
-    api.stats = new Stats(cfg.slowThreshold, cfg.slowRing);
+    api.stats = new Stats(cfg.slowThreshold, cfg.slowRing, cfg.statsMaxFingerprints);
     const pools = await connectWithRetry(poolBuilder.build, cfg, {
         retryInterval: cfg.connectRetryInterval,
         shouldStop: () => stopping,
@@ -105,7 +115,7 @@ async function boot() {
     });
     if (stopping) {
         // kora_sql was stopped while the first connection was opening.
-        await Promise.allSettled([pools.read.end(), pools.write.end()]);
+        await Promise.allSettled(poolBuilder.all(pools).map((pool) => pool.end()));
         const stopped = new Error('qbsql stopped while waiting for the database');
         stopped.code = 'QBSQL_STOPPING';
         throw stopped;
@@ -125,14 +135,23 @@ async function boot() {
         onStop: (callback) => on('onResourceStop', callback),
     });
     api.executor = new Executor(pools, api.statements, api.stats, legacyInventory, legacyHousing);
+    api.executor.readTimeout = cfg.queryTimeout;
     api.queue = new WriteQueue(api.executor, pools, api.stats, cfg);
-    api.txn = new TransactionRunner(pools);
-    api.schema = new SchemaManager(pools, { createCollate: cfg.defaultCollate });
+    api.txn = new TransactionRunner(pools, { statements: api.statements, maxStartTransactions: cfg.maxStartTransactions });
+    api.schema = new SchemaManager(pools, {
+        createCollate: cfg.defaultCollate,
+        allowModify: cfg.schemaAllowModify,
+        ownersTable: SCHEMA_OWNERS_TABLE.name,
+    });
 
     // The dead-letter table must exist before any write can dead-letter. Retry a
     // transient connection error here like the first connect, rather than
-    // leaving the driver permanently unready.
-    await connectWithRetry(() => api.schema.ensureTable(DEADLETTER_TABLE, 'kora_sql'), cfg, {
+    // leaving the driver permanently unready. The owners table comes first so
+    // later creations can record their owner.
+    await connectWithRetry(async () => {
+        await api.schema.ensureTable(SCHEMA_OWNERS_TABLE, 'kora_sql');
+        await api.schema.ensureTable(DEADLETTER_TABLE, 'kora_sql');
+    }, cfg, {
         retryInterval: cfg.connectRetryInterval,
         shouldStop: () => stopping,
         onRetry: (err, attempt, retryInterval) => {
@@ -184,5 +203,5 @@ on('onResourceStop', (resourceName) => {
         : Promise.resolve();
     // Close both pools after the final drain so a restart does not leave this
     // instance's connections open on the MySQL server.
-    if (pools) drained.finally(() => Promise.allSettled([pools.read.end(), pools.write.end()]));
+    if (pools) drained.finally(() => Promise.allSettled(poolBuilder.all(pools).map((pool) => pool.end())));
 });

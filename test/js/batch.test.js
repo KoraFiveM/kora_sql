@@ -120,9 +120,40 @@ test('update-only writes partial rows without attempting an insert', () => {
     const { sql, params } = buildUpdate('players', 'citizenid', ['position'], rows, { mode: 'assign', pad: false });
     assert.equal(
         sql,
-        'UPDATE `players` SET `position` = CASE WHEN `citizenid` = ? THEN ? WHEN `citizenid` = ? THEN ? ELSE `position` END WHERE (`citizenid` = ?) OR (`citizenid` = ?)'
+        'UPDATE `players` SET `position` = CASE WHEN `citizenid` = ? THEN ? WHEN `citizenid` = ? THEN ? ELSE `position` END WHERE `citizenid` IN (?,?)'
     );
     assert.deepEqual(params, ['ABC', 'p1', 'DEF', 'p2', 'ABC', 'DEF']);
+});
+
+test('update-only accumulate adds to the current value and keeps one IN list', () => {
+    const rows = [
+        { pk: 'ABC', cols: { bank: 5, cash: 1 } },
+        { pk: 'DEF', cols: { bank: -2, cash: 0 } },
+    ];
+    const { sql, params } = buildUpdate('players', 'citizenid', ['bank', 'cash'], rows, { mode: 'accumulate', pad: false });
+    assert.equal(
+        sql,
+        'UPDATE `players` SET ' +
+        '`bank` = CASE WHEN `citizenid` = ? THEN `bank` + ? WHEN `citizenid` = ? THEN `bank` + ? ELSE `bank` END, ' +
+        '`cash` = CASE WHEN `citizenid` = ? THEN `cash` + ? WHEN `citizenid` = ? THEN `cash` + ? ELSE `cash` END ' +
+        'WHERE `citizenid` IN (?,?)'
+    );
+    assert.deepEqual(params, ['ABC', 5, 'DEF', -2, 'ABC', 1, 'DEF', 0, 'ABC', 'DEF']);
+});
+
+test('update-only padding repeats a row inside the IN list (assign only)', () => {
+    const rows = [
+        { pk: 'A', cols: { v: 1 } },
+        { pk: 'B', cols: { v: 2 } },
+        { pk: 'C', cols: { v: 3 } },
+    ];
+    const { sql, params, rowCount } = buildUpdate('t', 'id', ['v'], rows, { mode: 'assign', pad: true });
+    assert.equal(rowCount, 4);
+    assert.equal(sql,
+        'UPDATE `t` SET `v` = CASE WHEN `id` = ? THEN ? WHEN `id` = ? THEN ? WHEN `id` = ? THEN ? WHEN `id` = ? THEN ? ELSE `v` END ' +
+        'WHERE `id` IN (?,?,?,?)');
+    assert.deepEqual(params, ['A', 1, 'B', 2, 'C', 3, 'A', 1, 'A', 'B', 'C', 'A']);
+    assert.throws(() => buildUpdate('t', 'id', ['v'], rows, { mode: 'accumulate', pad: true }), /padding is not sound/);
 });
 
 test('update-only supports a composite conflict key', () => {
@@ -130,7 +161,22 @@ test('update-only supports a composite conflict key', () => {
     const { sql, params } = buildUpdate('inventories', ['identifier', 'kind'], ['items'], rows, { mode: 'assign', pad: false });
     assert.equal(
         sql,
-        'UPDATE `inventories` SET `items` = CASE WHEN `identifier` = ? AND `kind` = ? THEN ? ELSE `items` END WHERE (`identifier` = ? AND `kind` = ?)'
+        'UPDATE `inventories` SET `items` = CASE WHEN `identifier` = ? AND `kind` = ? THEN ? ELSE `items` END WHERE (`identifier`,`kind`) IN ((?,?))'
     );
     assert.deepEqual(params, ['veh1', 'trunk', 'x', 'veh1', 'trunk']);
+});
+
+test('update-only composite keys use a row-constructor IN list, not an OR chain', () => {
+    const rows = [
+        { pk: ['veh1', 'trunk'], cols: { items: 'x' } },
+        { pk: ['veh2', 'glovebox'], cols: { items: 'y' } },
+    ];
+    const { sql, params } = buildUpdate('inventories', ['identifier', 'kind'], ['items'], rows, { mode: 'assign', pad: false });
+    assert.equal(
+        sql,
+        'UPDATE `inventories` SET `items` = CASE WHEN `identifier` = ? AND `kind` = ? THEN ? WHEN `identifier` = ? AND `kind` = ? THEN ? ELSE `items` END ' +
+        'WHERE (`identifier`,`kind`) IN ((?,?),(?,?))'
+    );
+    assert.doesNotMatch(sql, / OR /);
+    assert.deepEqual(params, ['veh1', 'trunk', 'x', 'veh2', 'glovebox', 'y', 'veh1', 'trunk', 'veh2', 'glovebox']);
 });

@@ -116,14 +116,72 @@ test('transaction accepts every oxmysql query shape and normalizes named binds',
     ], { '@value': 1 }, 'consumer');
 
     assert.equal(ok, true);
+    // Bound statements run prepared (binary protocol), like ad-hoc queries.
     assert.deepEqual(calls, [
         ['begin'],
-        ['query', 'UPDATE a SET value = :value', { '@value': 1, value: 1 }],
-        ['query', 'UPDATE b SET value = :value', { ':value': 2, value: 2 }],
-        ['query', 'UPDATE c SET value = ?', [3]],
+        ['execute', 'UPDATE a SET value = :value', { '@value': 1, value: 1 }],
+        ['execute', 'UPDATE b SET value = :value', { ':value': 2, value: 2 }],
+        ['execute', 'UPDATE c SET value = ?', [3]],
         ['commit'],
         ['release'],
     ]);
+});
+
+test('S8/P9: transactions prepare bound statements, fall back once for unpreparable text, and keep parameter-less SQL on query()', async () => {
+    const { StatementCache } = require('../../server/js/statements');
+    const statements = new StatementCache(16);
+    const calls = [];
+    const connection = {
+        beginTransaction: async () => calls.push(['begin']),
+        execute: async (sql, params) => {
+            calls.push(['execute', sql]);
+            if (/^SET/.test(sql)) { const e = new Error('unsupported'); e.code = 'ER_UNSUPPORTED_PS'; throw e; }
+            return [{ affectedRows: 1 }, []];
+        },
+        query: async (sql) => { calls.push(['query', sql]); return [{ affectedRows: 1 }, []]; },
+        commit: async () => calls.push(['commit']),
+        rollback: async () => calls.push(['rollback']),
+        release: () => calls.push(['release']),
+    };
+    const runner = new TransactionRunner({ write: { getConnection: async () => connection } }, { statements });
+    const sql = 'SET @kora_test = ?';
+    assert.equal(await runner.transaction([[sql, [1]], ['UPDATE a SET v = 1', []], ['UPDATE b SET v = ?', [2]]], [], 'consumer'), true);
+    assert.equal(await runner.transaction([[sql, [2]]], [], 'consumer'), true);
+    assert.deepEqual(calls.filter(([kind]) => kind === 'execute' || kind === 'query'), [
+        ['execute', sql], ['query', sql],                 // failed prepare paid once...
+        ['query', 'UPDATE a SET v = 1'],                  // parameter-less: text protocol
+        ['execute', 'UPDATE b SET v = ?'],
+        ['query', sql],                                   // ...and remembered afterwards
+    ]);
+    assert.equal(statements.isPreparable(sql), false);
+
+    // batch() gets the same fallback instead of failing on an unpreparable statement.
+    const results = await runner.batch([[sql, [3]]]);
+    assert.equal(results.length, 1);
+});
+
+test('S8: object binds are never expanded into SET assignments on the text protocol', () => {
+    const { poolOptions } = require('../../server/js/pool');
+    const options = poolOptions({ connection: { host: 'h', port: 3306, user: 'u', password: '', database: 'd', charset: 'utf8mb4' }, statementCache: 16 }, 4);
+    assert.equal(options.stringifyObjects, true);
+    const { format } = require('mysql2');
+    assert.equal(format('UPDATE players SET ? WHERE id = ?', [{ money: 1e9 }, 1], options.stringifyObjects),
+        "UPDATE players SET '[object Object]' WHERE id = 1");
+});
+
+test('P3: startTransaction callbacks beyond the cap wait for a slot instead of pinning more connections', async () => {
+    const { runner } = harness();
+    const capped = new TransactionRunner(runner.pools, { maxStartTransactions: 1 });
+    const gate = deferred();
+    let secondStarted = false;
+    const first = capped.startTransaction(async () => { await gate.promise; });
+    const second = capped.startTransaction(async () => { secondStarted = true; });
+    await nextTurn();
+    assert.equal(secondStarted, false, 'the second callback must wait for the first slot');
+    gate.resolve();
+    assert.deepEqual(await Promise.all([first, second]), [true, true]);
+    assert.equal(secondStarted, true);
+    assert.equal(capped.startActive, 0);
 });
 
 test('transaction rolls back and emits the oxmysql error event', async () => {
@@ -144,9 +202,10 @@ test('transaction rolls back and emits the oxmysql error event', async () => {
 test('startTransaction commits by default and rolls back on explicit false', async () => {
     const committed = harness();
     assert.equal(await committed.runner.startTransaction(async (query) => {
-        assert.deepEqual(await query('SELECT @value AS value', { '@value': 4 }), [{ ok: 1 }]);
+        assert.deepEqual(await query('SELECT @value AS value', { '@value': 4 }), { affectedRows: 1 });
+        assert.deepEqual(await query('SELECT 1'), [{ ok: 1 }]);
     }), true);
-    assert.deepEqual(committed.calls.map((call) => call[0]), ['begin', 'query', 'commit', 'release']);
+    assert.deepEqual(committed.calls.map((call) => call[0]), ['begin', 'execute', 'query', 'commit', 'release']);
     assert.equal(committed.calls[1][1], 'SELECT :value AS value');
 
     const rolledBack = harness();

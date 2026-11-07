@@ -89,6 +89,36 @@ function normalizeNamedPlaceholders(sql, params) {
     return { sql: out, params: normalized };
 }
 
+// True when a call supplies no bind values at all. Such SQL is either
+// placeholder-free (usually a literal-concatenated legacy statement) or broken
+// either way, so it goes over the text protocol: one round trip instead of
+// PREPARE + EXECUTE, and no per-connection prepared-statement cache entry for
+// a text that may never be seen again.
+function hasNoBinds(params) {
+    return Array.isArray(params) && params.length === 0;
+}
+
+// Run one statement on a pinned connection (transactions, batch). Same
+// policy as Executor.runRaw: bound statements use the binary protocol, where
+// bind values are inert, with the unpreparable fallback paid once per text;
+// parameter-less statements use the text protocol. The text path runs with
+// the pools' `stringifyObjects`, so an object bind is never expanded into
+// `col = value` assignments.
+async function runOnConnection(conn, sql, params, statements) {
+    if (!hasNoBinds(params) && (!statements || statements.isPreparable(sql))) {
+        try {
+            const result = await conn.execute(sql, params);
+            if (statements) statements.recordHit(sql);
+            return result;
+        } catch (err) {
+            if (!isUnpreparableError(err)) throw err;
+            if (statements) statements.markUnpreparable(sql);
+            log.debug('execute', `unpreparable, falling back to query(): ${sql}`);
+        }
+    }
+    return conn.query(sql, params);
+}
+
 // oxmysql's prepare/rawExecute accept one parameter list or an array of lists.
 function toParamSets(params) {
     const normal = normalizeParams(params);
@@ -104,6 +134,10 @@ class Executor {
         this.stats = stats;
         this.legacyInventory = legacyInventory;
         this.legacyHousing = legacyHousing;
+        // Client-side timeout (ms) for statements routed to the READ pool; 0
+        // disables it. Writes are never timed out client-side: the caller
+        // would be told "failed" while the write may still commit.
+        this.readTimeout = 0;
     }
 
     // A view of this executor whose queries apply oxmysql's typeCast (booleans,
@@ -135,10 +169,25 @@ class Executor {
         return this.pools.write;
     }
 
-    _query(pool, sql, params) {
-        return this._oxTypeCast
-            ? pool.query({ sql, values: params, typeCast })
-            : pool.query(sql, params);
+    // Build mysql2's call arguments. The positional form is kept when no
+    // per-call option applies, so plain calls stay identical to before.
+    _args(pool, sql, params, cast) {
+        const timeout = pool === this.pools.read && this.readTimeout > 0 ? this.readTimeout : 0;
+        if (!cast && !timeout) return [sql, params];
+        const options = { sql, values: params };
+        if (cast) options.typeCast = cast;
+        if (timeout) options.timeout = timeout;
+        return [options];
+    }
+
+    // Text protocol. `cast` defaults to the full oxmysql text typeCast, which
+    // the unpreparable fallback has always used.
+    _query(pool, sql, params, cast) {
+        return pool.query(...this._args(pool, sql, params, this._oxTypeCast ? (cast || typeCast) : null));
+    }
+
+    _execute(pool, sql, params) {
+        return pool.execute(...this._args(pool, sql, params, this._oxTypeCast ? typeCastExecute : null));
     }
 
     // The one true executor. Returns mysql2's raw [rows|result, fields] pair.
@@ -159,11 +208,14 @@ class Executor {
                 || (this.legacyInventory && this.legacyInventory(sql, params));
             if (legacy) {
                 result = [await legacy, undefined];
+            } else if (hasNoBinds(params)) {
+                // Text protocol, no StatementCache entry (see hasNoBinds). The
+                // execute-path cast keeps oxmysql result shapes identical to
+                // what the same statement returned when it was prepared.
+                result = await this._query(pool, sql, params, typeCastExecute);
             } else if (this.statements.isPreparable(sql)) {
                 try {
-                    result = await (this._oxTypeCast
-                        ? pool.execute({ sql, values: params, typeCast: typeCastExecute })
-                        : pool.execute(sql, params));
+                    result = await this._execute(pool, sql, params);
                     this.statements.recordHit(sql);
                 } catch (err) {
                     if (isUnpreparableError(err)) {
@@ -289,4 +341,4 @@ class Executor {
     }
 }
 
-module.exports = { Executor, normalizeParams, normalizeNamedPlaceholders, NULL_SENTINEL };
+module.exports = { Executor, normalizeParams, normalizeNamedPlaceholders, runOnConnection, hasNoBinds, NULL_SENTINEL };

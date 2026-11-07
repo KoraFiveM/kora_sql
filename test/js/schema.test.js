@@ -6,7 +6,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { SchemaManager, validateSpec, buildCreate, buildSeed, diff, NULL_SENTINEL } = require('../../server/js/schema.js');
+const { SchemaManager, validateSpec, buildCreate, buildSeed, diff, isWidening, NULL_SENTINEL } = require('../../server/js/schema.js');
 
 const spec = () => ({
     name: 'demo_ops',
@@ -215,6 +215,106 @@ test('modify=true converges a differing column; without it the difference is onl
     assert.deepEqual(modified.warnings, []);
     assert.deepEqual(modified.added.modified, ['kind']);
     assert.match(modified.statements[0], /^ALTER TABLE `t` MODIFY COLUMN `kind` enum\('a','b','c'\) NOT NULL DEFAULT 'a'$/);
+});
+
+test('S7: modify only applies widening changes', () => {
+    for (const [got, want] of [
+        ['varchar(50)', 'varchar(255)'], ['char(10)', 'varchar(10)'], ['int', 'bigint'], ['int unsigned', 'bigint unsigned'],
+        ['tinyint(1)', 'int'], ['decimal(10,2)', 'decimal(12,4)'], ['text', 'longtext'], ['blob', 'mediumblob'],
+        ["enum('a','b')", "enum('a','b','c')"], ["enum('a','b''c')", "enum('a','b\\'c','d')"], ['float', 'double'], ['datetime', 'datetime(3)'],
+    ]) assert.equal(isWidening(got, want), true, `${got} -> ${want}`);
+    for (const [got, want] of [
+        ['varchar(255)', 'varchar(16)'], ['bigint', 'int'], ['int', 'int unsigned'], ['int unsigned', 'int'],
+        ['decimal(12,4)', 'decimal(10,2)'], ['decimal(10,2)', 'decimal(10,4)'], ['longtext', 'text'], ['varchar(50)', 'int'],
+        ["enum('a','b','c')", "enum('a','b')"], ['varchar(50)', 'text'], ['double', 'float'], ['datetime(3)', 'datetime'],
+    ]) assert.equal(isWidening(got, want), false, `${got} -> ${want}`);
+});
+
+test('S7: narrowing, NOT NULL tightening, extend tables and the convar all refuse modify', () => {
+    const actual = { columns: [{ COLUMN_NAME: 'name', COLUMN_TYPE: 'varchar(255)', IS_NULLABLE: 'YES' }], indexes: [], foreign: [], checks: [] };
+    const spec = (col, extra = {}) => validateSpec({ name: 'players', columns: [{ name: 'name', modify: true, ...col }], ...extra });
+    const shrink = diff(spec({ type: 'varchar(16)', null: true }), actual);
+    assert.deepEqual(shrink.statements, []);
+    assert.match(shrink.warnings[0], /modify refused \(only widening type changes are applied\)/);
+    const tighten = diff(spec({ type: 'varchar(255)' }), actual);
+    assert.deepEqual(tighten.statements, []);
+    assert.match(tighten.warnings[0], /NULL to NOT NULL/);
+    const extend = diff(spec({ type: 'varchar(500)', null: true }, { extend: true }), actual);
+    assert.deepEqual(extend.statements, []);
+    assert.match(extend.warnings[0], /extend table never modifies/);
+    const disabled = diff(spec({ type: 'varchar(500)', null: true }), actual, { allowModify: false });
+    assert.deepEqual(disabled.statements, []);
+    assert.match(disabled.warnings[0], /kora_sql_schema_allow_modify/);
+    const widen = diff(spec({ type: 'varchar(500)', null: true }), actual);
+    assert.deepEqual(widen.modifies.map((m) => m.column), ['name']);
+});
+
+function ownedPools({ owner = null, columnType = 'varchar(50)' } = {}) {
+    const executed = [];
+    const owners = new Map(owner ? [['demo', owner]] : []);
+    const query = async (sql, values) => {
+        const text = typeof sql === 'string' ? sql : sql.sql;
+        executed.push({ text, values });
+        if (text.includes('information_schema.TABLES')) return [[{ 1: 1 }], []];
+        if (text.includes('information_schema.COLUMNS')) return [[{ COLUMN_NAME: 'name', COLUMN_TYPE: columnType, IS_NULLABLE: 'NO' }], []];
+        if (text.includes('information_schema')) return [[], []];
+        if (text.startsWith('INSERT IGNORE INTO `kora_sql_schema_owners`')) {
+            if (!owners.has(values[0])) owners.set(values[0], values[1]);
+            return [{ affectedRows: 1 }, []];
+        }
+        if (text.startsWith('SELECT `resource` FROM `kora_sql_schema_owners`')) {
+            return [owners.has(values[0]) ? [{ resource: owners.get(values[0]) }] : [], []];
+        }
+        return [{ affectedRows: 0 }, []];
+    };
+    return { executed, owners, pools: { read: { query }, write: { query } } };
+}
+
+test('S7: only the owning resource may modify; an unowned legacy table is claimed by its first modifier', async () => {
+    const spec = { name: 'demo', columns: [{ name: 'name', type: 'varchar(100)', modify: true }] };
+    const opts = { ownersTable: 'kora_sql_schema_owners' };
+
+    const foreign = ownedPools({ owner: 'owner_res' });
+    const refused = await new SchemaManager(foreign.pools, opts).ensureTable(spec, 'other_res');
+    assert.deepEqual(refused.modified_columns, []);
+    assert.match(refused.warnings.join('\n'), /other_res does not own demo/);
+    assert.ok(!foreign.executed.some((e) => /MODIFY COLUMN/.test(e.text)));
+
+    const own = ownedPools({ owner: 'owner_res' });
+    const applied = await new SchemaManager(own.pools, opts).ensureTable(spec, 'owner_res');
+    assert.deepEqual(applied.modified_columns, ['name']);
+    assert.ok(own.executed.some((e) => /^ALTER TABLE `demo` MODIFY COLUMN `name` varchar\(100\)/.test(e.text)));
+
+    const legacy = ownedPools();
+    await new SchemaManager(legacy.pools, opts).ensureTable(spec, 'first_res');
+    assert.equal(legacy.owners.get('demo'), 'first_res');
+    const second = await new SchemaManager(legacy.pools, opts).ensureTable(spec, 'second_res');
+    assert.match(second.warnings.join('\n'), /second_res does not own demo/);
+
+    // Without an owners table (or a caller identity) nobody can modify.
+    const anonymous = ownedPools({ owner: 'owner_res' });
+    assert.deepEqual((await new SchemaManager(anonymous.pools).ensureTable(spec, 'owner_res')).modified_columns, []);
+});
+
+test('S7: creating a table records its owner; inspection runs on the read pool', async () => {
+    const executedRead = [];
+    const executedWrite = [];
+    const pools = {
+        read: { query: async (sql) => { executedRead.push(typeof sql === 'string' ? sql : sql.sql); return [[], []]; } },
+        write: { query: async (sql, values) => { executedWrite.push([typeof sql === 'string' ? sql : sql.sql, values]); return [{ affectedRows: 1 }, []]; } },
+    };
+    await new SchemaManager(pools, { ownersTable: 'kora_sql_schema_owners' }).ensureTable({ name: 'fresh', columns: [{ name: 'id', type: 'int' }] }, 'maker');
+    assert.ok(executedRead.every((sql) => sql.includes('information_schema')));
+    assert.ok(executedRead.length > 0);
+    assert.ok(!executedWrite.some(([sql]) => sql.includes('information_schema')));
+    assert.deepEqual(executedWrite.find(([sql]) => sql.includes('kora_sql_schema_owners'))[1], ['fresh', 'maker']);
+});
+
+test('S2: schema and queue share one identifier rule', () => {
+    const { IDENT } = require('../../server/js/ident.js');
+    assert.ok(IDENT.test('players'));
+    assert.ok(!IDENT.test('players.money'));
+    assert.throws(() => validateSpec({ name: 'players.money', columns: [{ name: 'id', type: 'int' }] }), /qbsql schema: invalid table name/);
 });
 
 test('extend tables add columns to an existing table but refuse to create or seed one', async () => {

@@ -68,8 +68,14 @@ test('generated columns, checks, modify and extend converge on a real database',
     skip: !disposable,
 }, async () => {
     const pool = mysql.createPool({ uri: dsn, namedPlaceholders: true });
-    const manager = new SchemaManager({ write: pool });
-    const drop = async () => { await pool.query('DROP TABLE IF EXISTS `kora_sql_t_gen`'); await pool.query('DROP TABLE IF EXISTS `kora_sql_t_ext`'); };
+    // `modify` is owner-only, so this manager tracks owners (as index.js does).
+    const owners = 'kora_sql_t_owners';
+    const manager = new SchemaManager({ write: pool }, { ownersTable: owners });
+    const drop = async () => {
+        await pool.query('DROP TABLE IF EXISTS `kora_sql_t_gen`');
+        await pool.query('DROP TABLE IF EXISTS `kora_sql_t_ext`');
+        await pool.query(`DROP TABLE IF EXISTS \`${owners}\``);
+    };
     const gen = (kinds) => ({
         name: 'kora_sql_t_gen', primary: ['id'], comment: 'schema test',
         columns: [
@@ -86,12 +92,20 @@ test('generated columns, checks, modify and extend converge on a real database',
     });
     try {
         await drop();
+        await manager.ensureTable({ name: owners, primary: ['table_name'], columns: [
+            { name: 'table_name', type: 'varchar(64)' }, { name: 'resource', type: 'varchar(64)' },
+            { name: 'claimed_at', type: 'timestamp', default: { raw: 'CURRENT_TIMESTAMP' } },
+        ] }, 'kora_sql');
         assert.equal((await manager.ensureTable(gen(['a', 'b']), 'itest')).created, true);
         const again = await manager.ensureTable(gen(['a', 'b']), 'itest');
         assert.deepEqual([again.created, again.added_columns, again.modified_columns, again.added_indexes, again.added_checks, again.warnings], [false, [], [], [], [], []]);
         assert.equal(again.seeded, 0);
 
         await assert.rejects(pool.query('INSERT INTO `kora_sql_t_gen` (`amount`) VALUES (-1)'), /CONSTRAINT|constraint/i);
+        const notOwner = await manager.ensureTable(gen(['a', 'b', 'c']), 'other_resource');
+        assert.deepEqual(notOwner.modified_columns, [], 'only the creating resource may modify');
+        const narrowed = await manager.ensureTable(gen(['a']), 'itest');
+        assert.deepEqual(narrowed.modified_columns, [], 'dropping an enum value is never applied');
         const widened = await manager.ensureTable(gen(['a', 'b', 'c']), 'itest');
         assert.deepEqual(widened.modified_columns, ['kind']);
 

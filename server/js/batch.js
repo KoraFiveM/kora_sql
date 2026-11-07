@@ -36,9 +36,9 @@ function bucketFor(n) {
 }
 
 function quoteIdent(id) {
-    // Backtick-quote, escaping embedded backticks. Column and table names come
-    // from our own code (COLUMN_FOR map in kora_core), never from user input, but
-    // quoting defends the golden-SQL contract regardless.
+    // Backtick-quote, escaping embedded backticks. The write queue validates
+    // every table, key and column name against ident.js before a row is
+    // accepted; quoting still defends the golden-SQL contract regardless.
     return '`' + String(id).replace(/`/g, '``') + '`';
 }
 
@@ -120,6 +120,15 @@ function build(table, conflictKey, columns, rows, opts) {
 // It supports composite conflict keys too. Padding is safe for assign mode
 // (repeating the same assignment converges); it remains forbidden for
 // accumulate mode for the same reason as the upsert builder.
+//
+// The WHERE clause is `key IN (?,...)` (or `(a,b) IN ((?,?),...)` for a
+// composite key), which the range optimizer resolves as index lookups. The
+// old `(key = ?) OR (key = ?) ...` chain could exceed range_optimizer_max_mem_size
+// for composite keys and fall back to a full scan. A JOIN against a derived
+// table of bound rows would also drop the per-column CASE, but a derived
+// column's IMPLICIT collation fails ("Illegal mix of collations") against key
+// columns that use a different collation from the connection, so the CASE
+// form is kept.
 function buildUpdate(table, conflictKey, columns, rows, opts) {
     const mode = (opts && opts.mode) || 'assign';
     const pad = opts && opts.pad;
@@ -143,15 +152,17 @@ function buildUpdate(table, conflictKey, columns, rows, opts) {
         return `${quoteIdent(column)} = CASE ${branches.join(' ')} ELSE ${quoteIdent(column)} END`;
     });
 
-    const where = [];
+    const composite = keyCols.length > 1;
+    const tuple = composite ? '(' + keyCols.map(() => '?').join(',') + ')' : '?';
+    const keyList = composite ? '(' + keyCols.map(quoteIdent).join(',') + ')' : quoteIdent(keyCols[0]);
     for (const row of effectiveRows) {
         const pkVals = Array.isArray(row.pk) ? row.pk : [row.pk];
-        where.push(`(${keyMatch()})`);
         for (const value of pkVals) params.push(value);
     }
+    const where = `${keyList} IN (${new Array(effectiveRows.length).fill(tuple).join(',')})`;
 
     return {
-        sql: `UPDATE ${quoteIdent(table)} SET ${assignments.join(', ')} WHERE ${where.join(' OR ')}`,
+        sql: `UPDATE ${quoteIdent(table)} SET ${assignments.join(', ')} WHERE ${where}`,
         params,
         rowCount: effectiveRows.length,
     };

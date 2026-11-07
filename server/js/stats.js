@@ -1,20 +1,60 @@
 // Observability: per-fingerprint aggregates + a slow-query ring buffer + the
 // queue counters that prove the write-coalescing thesis.
 //
-// The FINGERPRINT is the SQL text itself, because this driver always
-// parameterises -- there are no literal values baked into the SQL to strip, so
-// the text is already a stable fingerprint. That is a direct consequence of the
-// prepared-statement design and is what makes attribution cheap.
+// The FINGERPRINT is the SQL text with string and number literals replaced by
+// `?` and whitespace collapsed. kora's own code parameterises, but legacy
+// callers concatenate values into SQL (`... WHERE citizenid = '" .. cid .. "'`),
+// and keying by raw text would grow one entry per player forever. The map is
+// also capped: once full, the least recently used fingerprint is folded into
+// one `<other>` aggregate, so memory stays bounded whatever callers send.
 
 'use strict';
 
+const OTHER = '<other>';
+const TOP_N = 10;
+
+// Backticked identifiers are kept (a digit inside `col1` is not a literal);
+// quoted strings, hex and decimal numbers become `?`; `IN (?, ?, ...)` lists
+// collapse so a list's length does not create a new fingerprint.
+const LITERALS = /(`(?:[^`]|``)*`)|'(?:\\.|''|[^'\\])*'|"(?:\\.|""|[^"\\])*"|\b0x[0-9a-f]+\b|\b\d+(?:\.\d+)?(?:e[+-]?\d+)?\b/gi;
+function fingerprint(sql) {
+    if (typeof sql !== 'string') return String(sql);
+    return sql
+        .replace(LITERALS, (match, ident) => (ident !== undefined ? ident : '?'))
+        .replace(/\s+/g, ' ')
+        .replace(/\(\s*\?(?:\s*,\s*\?)+\s*\)/g, '(?+)')
+        .trim();
+}
+
+function blankAggregate() {
+    return {
+        count: 0, totalMs: 0, maxMs: 0, minMs: Infinity,
+        errors: 0, rowsReturned: 0, lastSeenAt: 0,
+    };
+}
+
+function mergeInto(target, agg) {
+    target.count += agg.count;
+    target.totalMs += agg.totalMs;
+    target.maxMs = Math.max(target.maxMs, agg.maxMs);
+    target.minMs = Math.min(target.minMs, agg.minMs);
+    target.errors += agg.errors;
+    target.rowsReturned += agg.rowsReturned;
+    target.lastSeenAt = Math.max(target.lastSeenAt, agg.lastSeenAt);
+}
+
 class Stats {
-    constructor(slowThreshold, slowRing) {
+    constructor(slowThreshold, slowRing, maxFingerprints) {
         this.slowThreshold = slowThreshold;
         this.slowRingSize = slowRing;
+        this.maxFingerprints = Math.max(1, maxFingerprints || 2000);
 
-        // fingerprint -> aggregate
+        // fingerprint -> aggregate, in least-recently-used order.
         this.byFingerprint = new Map();
+        // Raw SQL text -> fingerprint. Bounded; a miss just recomputes.
+        this.fingerprintCache = new Map();
+        // Everything evicted from byFingerprint.
+        this.other = null;
 
         this.slow = [];
         this.slowHead = 0;
@@ -32,14 +72,32 @@ class Stats {
         };
     }
 
+    _fingerprint(sql) {
+        let fp = this.fingerprintCache.get(sql);
+        if (fp === undefined) {
+            fp = fingerprint(sql);
+            if (this.fingerprintCache.size >= 1000) this.fingerprintCache.clear();
+            this.fingerprintCache.set(sql, fp);
+        }
+        return fp;
+    }
+
     record(sql, ms, rows, errored, resource) {
-        let agg = this.byFingerprint.get(sql);
-        if (!agg) {
-            agg = {
-                count: 0, totalMs: 0, maxMs: 0, minMs: Infinity,
-                errors: 0, rowsReturned: 0, lastSeenAt: 0,
-            };
-            this.byFingerprint.set(sql, agg);
+        const fp = this._fingerprint(sql);
+        let agg = this.byFingerprint.get(fp);
+        if (agg) {
+            // Move to the most-recently-used end.
+            this.byFingerprint.delete(fp);
+            this.byFingerprint.set(fp, agg);
+        } else {
+            agg = blankAggregate();
+            this.byFingerprint.set(fp, agg);
+            if (this.byFingerprint.size > this.maxFingerprints) {
+                const [oldest, evicted] = this.byFingerprint.entries().next().value;
+                this.byFingerprint.delete(oldest);
+                if (!this.other) this.other = blankAggregate();
+                mergeInto(this.other, evicted);
+            }
         }
         agg.count++;
         agg.totalMs += ms;
@@ -81,14 +139,21 @@ class Stats {
 
     summary(statementCache) {
         let totalCount = 0, totalMs = 0, totalErrors = 0;
+        // Bounded top-N by totalMs: one pass, no full sort of every fingerprint.
         const top = [];
-        for (const [sql, agg] of this.byFingerprint) {
+        const consider = (sql, agg) => {
             totalCount += agg.count;
             totalMs += agg.totalMs;
             totalErrors += agg.errors;
-            top.push({ sql, ...agg, avgMs: agg.count ? agg.totalMs / agg.count : 0 });
-        }
-        top.sort((a, b) => b.totalMs - a.totalMs);
+            if (top.length === TOP_N && agg.totalMs <= top[TOP_N - 1].totalMs) return;
+            const entry = { sql, ...agg, avgMs: agg.count ? agg.totalMs / agg.count : 0 };
+            let i = top.length;
+            while (i > 0 && top[i - 1].totalMs < entry.totalMs) i--;
+            top.splice(i, 0, entry);
+            if (top.length > TOP_N) top.pop();
+        };
+        for (const [sql, agg] of this.byFingerprint) consider(sql, agg);
+        if (this.other) consider(OTHER, this.other);
 
         const q = this.queue;
         const flushDurations = q.flushDurationMs;
@@ -102,9 +167,10 @@ class Stats {
                 errors: totalErrors,
                 avgMs: totalCount ? totalMs / totalCount : 0,
                 distinctFingerprints: this.byFingerprint.size,
+                evictedQueries: this.other ? this.other.count : 0,
                 slowCount: this.slow.length,
                 slowThreshold: this.slowThreshold,
-                topByTotalMs: top.slice(0, 10),
+                topByTotalMs: top,
             },
             queue: {
                 boundaryCrossings: q.boundaryCrossings,
@@ -126,6 +192,8 @@ class Stats {
 
     reset() {
         this.byFingerprint.clear();
+        this.fingerprintCache.clear();
+        this.other = null;
         this.slow = [];
         this.slowHead = 0;
         this.queue = {
@@ -136,4 +204,4 @@ class Stats {
     }
 }
 
-module.exports = { Stats };
+module.exports = { Stats, fingerprint };

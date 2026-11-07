@@ -1,7 +1,11 @@
 // Declarative table setup. A resource describes a table as data (columns, keys,
 // foreign keys, seed rows); this module creates it if missing and, when it exists,
-// ADDS whatever is missing. It never alters or drops anything that already
-// exists: type/nullability/collation differences are reported as warnings only.
+// ADDS whatever is missing. It never drops anything, and never alters an
+// existing column unless that column opts in with `modify = true`, the change
+// only WIDENS it (no data can be truncated or rejected), and the calling
+// resource owns the table (recorded in kora_sql_schema_owners when it created
+// the table, or claimed by the first resource that modifies a pre-existing
+// one). Everything else is reported as a warning only.
 //
 // Everything interpolated into DDL is validated first (identifiers, types,
 // keywords). Values (seed rows) are always bound parameters; column DEFAULTs
@@ -11,9 +15,9 @@
 
 const { escape } = require('mysql2');
 const log = require('./logger');
+const { IDENT } = require('./ident');
 
 const NULL_SENTINEL = '\u0000qbsql:null\u0000';
-const IDENT = /^[A-Za-z0-9_]{1,64}$/;
 const BASE_TYPE = /^(?:(?:tiny|small|medium|big)?int(?:\(\d{1,2}\))?|integer|decimal\(\d{1,2}(?:,\d{1,2})?\)|numeric\(\d{1,2}(?:,\d{1,2})?\)|float|double|(?:var)?char\(\d{1,5}\)|(?:var)?binary\(\d{1,5}\)|tinytext|text|mediumtext|longtext|tinyblob|blob|mediumblob|longblob|json|date|time(?:\(\d\))?|datetime(?:\(\d\))?|timestamp(?:\(\d\))?|year|boolean|bool|enum|set)$/i;
 const RAW_DEFAULT = /^(?:CURRENT_TIMESTAMP|NOW|LOCALTIMESTAMP)(?:\(\d?\))?$/i;
 const EXPRESSION_BANNED = /;|--|\/\*|\*\//;
@@ -161,6 +165,62 @@ function typeMatches(want, got) {
     return want === got || (want === 'json' && got === 'longtext');
 }
 
+const INT_RANK = { tinyint: 1, smallint: 2, mediumint: 3, int: 4, bigint: 5 };
+const TEXT_RANK = { tinytext: 1, text: 2, mediumtext: 3, longtext: 4 };
+const BLOB_RANK = { tinyblob: 1, blob: 2, mediumblob: 3, longblob: 4 };
+
+// "decimal(10,2) unsigned" -> { name: 'decimal', args: '10,2', unsigned: true }
+function parseColumnType(type) {
+    const t = normaliseType(type);
+    const unsigned = /\bunsigned\b/.test(t);
+    const zerofill = /\bzerofill\b/.test(t);
+    const m = t.replace(/\s+(?:unsigned|zerofill)\b/g, '').trim().match(/^([a-z]+)(?:\((.*)\))?$/);
+    return m ? { name: m[1], args: m[2], unsigned, zerofill } : null;
+}
+
+// enum('a','b''c') or enum('a','b\'c') -> ['a', "b'c"]
+function enumValues(args) {
+    const out = [];
+    const re = /'((?:[^'\\]|\\.|'')*)'/g;
+    let m;
+    while ((m = re.exec(args || ''))) out.push(m[1].replace(/''/g, "'").replace(/\\(.)/g, '$1'));
+    return out;
+}
+
+// True when changing a column from `got` to `want` (both information_schema
+// spellings) can neither truncate nor reject an existing value: a larger
+// integer of the same signedness, a longer string, a wider decimal, a
+// superset enum/set, a larger text/blob, more fractional-second digits, or
+// float to double. Anything else -- including every narrowing -- is refused.
+function isWidening(got, want) {
+    if (got === want) return true;
+    const a = parseColumnType(got);
+    const b = parseColumnType(want);
+    if (!a || !b || a.zerofill !== b.zerofill || a.unsigned !== b.unsigned) return false;
+    if (a.name in INT_RANK && b.name in INT_RANK) return INT_RANK[b.name] >= INT_RANK[a.name];
+    if (['char', 'varchar', 'binary', 'varbinary'].includes(a.name)) {
+        const sameFamily = a.name === b.name
+            || (a.name === 'char' && b.name === 'varchar') || (a.name === 'binary' && b.name === 'varbinary');
+        return sameFamily && Number(b.args) >= Number(a.args);
+    }
+    if (a.name in TEXT_RANK && b.name in TEXT_RANK) return TEXT_RANK[b.name] >= TEXT_RANK[a.name];
+    if (a.name in BLOB_RANK && b.name in BLOB_RANK) return BLOB_RANK[b.name] >= BLOB_RANK[a.name];
+    if (['decimal', 'numeric'].includes(a.name) && ['decimal', 'numeric'].includes(b.name)) {
+        const [ap, as = 0] = String(a.args || '10,0').split(',').map(Number);
+        const [bp, bs = 0] = String(b.args || '10,0').split(',').map(Number);
+        return bs >= as && bp - bs >= ap - as;
+    }
+    if (a.name === 'float' && b.name === 'double') return true;
+    if ((a.name === 'enum' || a.name === 'set') && b.name === a.name) {
+        const have = enumValues(b.args);
+        return enumValues(a.args).every((v) => have.includes(v));
+    }
+    if (['datetime', 'timestamp', 'time'].includes(a.name) && b.name === a.name) {
+        return Number(b.args || 0) >= Number(a.args || 0);
+    }
+    return false;
+}
+
 function columnDefinition(col, spec) {
     const parts = [q(col.name), col.type.toLowerCase() === 'enum' || col.type.toLowerCase() === 'set'
         ? `${col.type.toLowerCase()}(${col.values.map((v) => escape(v)).join(',')})`
@@ -209,8 +269,13 @@ function buildCreate(spec) {
 
 // actual = { columns: [{COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE}], indexes: [{INDEX_NAME, COLUMN_NAME, SEQ_IN_INDEX, NON_UNIQUE}], foreign: [{CONSTRAINT_NAME}] }
 // Returns ALTER statements for what is missing plus warnings for what differs.
-function diff(spec, actual) {
+// `modifies` lists the MODIFY COLUMN statements (also in `statements`) so the
+// caller can withhold them when the resource does not own the table.
+// opts.allowModify (default true) = false turns every `modify` into a warning.
+function diff(spec, actual, opts = {}) {
+    const allowModify = opts.allowModify !== false;
     const statements = [];
+    const modifies = [];
     const added = { columns: [], modified: [], indexes: [], foreign: [], checks: [] };
     const warnings = [];
     const alter = (clause) => `ALTER TABLE ${q(spec.name)} ${clause}`;
@@ -229,8 +294,19 @@ function diff(spec, actual) {
         const typeDiffers = !typeMatches(want, got);
         const nullDiffers = !col.generated && wantNull !== (existing.IS_NULLABLE === 'YES');
         if (col.modify === true && !col.generated && (typeDiffers || nullDiffers)) {
-            statements.push(alter(`MODIFY COLUMN ${columnDefinition(col, spec)}`));
-            added.modified.push(col.name);
+            const refused = !allowModify ? 'modify is disabled by kora_sql_schema_allow_modify'
+                : spec.extend ? 'an extend table never modifies existing columns'
+                    : typeDiffers && !isWidening(got, want) ? 'only widening type changes are applied'
+                        : nullDiffers && !wantNull ? 'NULL to NOT NULL is not applied'
+                            : null;
+            if (!refused) {
+                const statement = alter(`MODIFY COLUMN ${columnDefinition(col, spec)}`);
+                statements.push(statement);
+                modifies.push({ column: col.name, statement });
+                added.modified.push(col.name);
+                continue;
+            }
+            warnings.push(`${spec.name}.${col.name}: modify refused (${refused}); type is '${existing.COLUMN_TYPE}'${existing.IS_NULLABLE === 'YES' ? ' NULL' : ''}, schema expects '${want}'${wantNull ? ' NULL' : ''} (not altered)`);
             continue;
         }
         if (typeDiffers) warnings.push(`${spec.name}.${col.name}: type is '${existing.COLUMN_TYPE}', schema expects '${want}' (not altered)`);
@@ -265,7 +341,7 @@ function diff(spec, actual) {
         statements.push(alter(`ADD ${checkDefinition(check)}`));
         added.checks.push(check.name);
     }
-    return { statements, added, warnings };
+    return { statements, modifies, added, warnings };
 }
 
 // INSERT IGNORE keeps seeding idempotent and never overwrites edits made after
@@ -294,10 +370,47 @@ function buildSeed(spec) {
 const ddl = (sql) => ({ sql, namedPlaceholders: false });
 
 class SchemaManager {
+    // defaults: { createCollate, allowModify (default true), ownersTable }.
+    // Without an ownersTable no resource owns anything, so `modify` is refused.
     constructor(pools, defaults = {}) {
         this.pools = pools;
         this.defaults = defaults;
+        this.allowModify = defaults.allowModify !== false;
+        this.ownersTable = defaults.ownersTable || null;
         this._tails = new Map();
+    }
+
+    // information_schema reads go to the read pool, off the write pool the
+    // flush and transactions use.
+    _readPool() {
+        return this.pools.read || this.pools.write;
+    }
+
+    // Record the creator of a table. Best effort: a failure only means
+    // nobody can `modify` that table later.
+    async _recordOwner(table, resource) {
+        if (!this.ownersTable || !resource) return;
+        try {
+            await this.pools.write.query(
+                `INSERT IGNORE INTO ${q(this.ownersTable)} (\`table_name\`, \`resource\`) VALUES (?, ?)`, [table, resource]);
+        } catch (err) {
+            log.debug('schema', `could not record the owner of ${table}: ${err.message}`);
+        }
+    }
+
+    // True when `resource` owns `table`. A table with no recorded owner (it
+    // predates ownership tracking) is claimed by the first resource that asks.
+    async _owns(table, resource) {
+        if (!this.ownersTable || !resource) return false;
+        try {
+            await this._recordOwner(table, resource);
+            const [rows] = await this.pools.write.query(
+                `SELECT \`resource\` FROM ${q(this.ownersTable)} WHERE \`table_name\` = ?`, [table]);
+            return Array.isArray(rows) && rows.length > 0 && rows[0].resource === resource;
+        } catch (err) {
+            log.warn('schema', `could not check the owner of ${table}: ${err.message}`);
+            return false;
+        }
     }
 
     // Serialise work per table so two resources racing on the same table do not interleave DDL.
@@ -309,7 +422,7 @@ class SchemaManager {
     }
 
     async _inspect(name) {
-        const db = this.pools.write;
+        const db = this._readPool();
         const [tables] = await db.query(
             'SELECT 1 FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?', [name]);
         if (tables.length === 0) return null;
@@ -337,8 +450,18 @@ class SchemaManager {
                 await this.pools.write.query(ddl(buildCreate(spec)));
                 report.created = true;
                 log.info('schema', `${resource || 'unknown'}: created table ${spec.name}`);
+                await this._recordOwner(spec.name, resource);
             } else {
-                const result = diff(spec, actual);
+                const result = diff(spec, actual, { allowModify: this.allowModify });
+                if (result.modifies.length > 0 && !(await this._owns(spec.name, resource))) {
+                    // Only the owning resource may alter existing columns.
+                    const withheld = new Set(result.modifies.map((m) => m.statement));
+                    result.statements = result.statements.filter((s) => !withheld.has(s));
+                    for (const m of result.modifies) {
+                        result.warnings.push(`${spec.name}.${m.column}: modify refused (${resource || 'the caller'} does not own ${spec.name}) (not altered)`);
+                    }
+                    result.added.modified = [];
+                }
                 for (const stmt of result.statements) await this.pools.write.query(ddl(stmt));
                 report.added_columns = result.added.columns;
                 report.modified_columns = result.added.modified;
@@ -372,7 +495,7 @@ class SchemaManager {
         const deadline = Date.now() + (Number(timeoutMs) > 0 ? Number(timeoutMs) : 60000);
         const unique = [...new Set(names)];
         for (;;) {
-            const [rows] = await this.pools.write.query(
+            const [rows] = await this._readPool().query(
                 'SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN (?)', [unique]);
             const have = new Set(rows.map((r) => r.TABLE_NAME.toLowerCase()));
             const missing = unique.filter((n) => !have.has(n.toLowerCase()));
@@ -391,4 +514,4 @@ class SchemaManager {
     }
 }
 
-module.exports = { SchemaManager, validateSpec, buildCreate, buildSeed, diff, NULL_SENTINEL };
+module.exports = { SchemaManager, validateSpec, buildCreate, buildSeed, diff, isWidening, NULL_SENTINEL };

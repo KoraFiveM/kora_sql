@@ -7,7 +7,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { WriteQueue } = require('../../server/js/queue.js');
+const { WriteQueue, pkKey, comparePk, hasUniqueIndexOn, isRetryableWriteError } = require('../../server/js/queue.js');
 const { Stats } = require('../../server/js/stats.js');
 
 function makeFakePools(opts) {
@@ -352,7 +352,7 @@ for (const mode of ['assign', 'accumulate']) {
                 }
 
                 const remaining = failDeadLetter && mode === 'accumulate' ? 109 : 99;
-                assert.equal(q.pending.get('players').rows.get('BAD').cols.money, remaining,
+                assert.equal(q.pending.get('players').rows.get(pkKey('BAD')).cols.money, remaining,
                     'retain the new assignment or delta without replaying a dead-lettered increment');
                 assert.equal(q.pendingRowCount, 1);
                 await q.flush('players');
@@ -388,4 +388,223 @@ test('batched UPDATE chunks stay inside the placeholder budget for wide rows', a
     // 4 columns x (1 key + 1 value) + 1 WHERE key = 9 placeholders a row -> 11 rows a statement.
     assert.ok(executed.length >= 3);
     for (const e of executed) assert.ok(e.params.length <= 100, `${e.params.length} placeholders`);
+});
+
+// ---------------------------------------------------------------------------
+// Review fixes (REVIEW.md S2, S3, S4, P3, P5, P6, P7, P10).
+// ---------------------------------------------------------------------------
+
+function deterministic(code) {
+    const err = new Error(`simulated ${code}`);
+    err.code = code;
+    return err;
+}
+
+test('S3: composite keys that collided under the old \\x1f join stay distinct rows', async () => {
+    assert.notEqual(pkKey(['a\x1fb', 'c']), pkKey(['a', 'b\x1fc']));
+    assert.notEqual(pkKey(['a', 'b']), pkKey('a\x1fb'));
+    assert.notEqual(pkKey(['a,b']), pkKey(['a', 'b']));
+
+    const { executed, pools } = makeFakePools();
+    const q = new WriteQueue(null, pools, new Stats(150, 50), CFG);
+    q.enqueue('inventories', ['owner', 'label'], { pk: ['a\x1fb', 'c'], cols: { items: 'first' } });
+    q.enqueue('inventories', ['owner', 'label'], { pk: ['a', 'b\x1fc'], cols: { items: 'second' } });
+    await q.flush();
+    assert.equal(executed.length, 1);
+    assert.deepEqual(executed[0].params, ['a', 'b\x1fc', 'second', 'a\x1fb', 'c', 'first'],
+        'each row keeps its own key and value (sorted by key)');
+});
+
+test('S3: object/null key components are refused instead of colliding as "[object Object]"', () => {
+    const { pools } = makeFakePools();
+    const q = new WriteQueue(null, pools, new Stats(150, 50), CFG);
+    assert.throws(() => q.enqueue('players', 'citizenid', { pk: {}, cols: { money: 1 } }), /primary key values/);
+    assert.throws(() => q.enqueue('players', 'citizenid', { pk: null, cols: { money: 1 } }), /primary key values/);
+    assert.throws(() => q.enqueue('players', 'citizenid', { pk: NaN, cols: { money: 1 } }), /primary key values/);
+    assert.throws(() => q.enqueue('t', ['a', 'b'], { pk: ['only-one'], cols: { v: 1 } }), /2 primary key value/);
+    assert.equal(q.pendingRowCount, 0);
+});
+
+test('S3: a numeric key and its string spelling address the same row and still merge', async () => {
+    const { executed, pools } = makeFakePools();
+    const q = new WriteQueue(null, pools, new Stats(150, 50), CFG);
+    q.enqueue('vehicles', 'id', { pk: 7, cols: { fuel: 10 } });
+    q.enqueue('vehicles', 'id', { pk: '7', cols: { fuel: 20 } });
+    await q.flush();
+    assert.equal(executed.length, 1);
+    assert.deepEqual(executed[0].params, [7, 20]);
+});
+
+test('S3: composite dead-letter keys are stored unambiguously', async (t) => {
+    const { executed, pools } = makeFakePools({ failFirst: 6 });
+    const q = new WriteQueue(null, pools, new Stats(150, 50), { ...CFG, flushInterval: 60000 });
+    t.after(() => clearTimeout(q.timer));
+    q.enqueue('inventories', ['owner', 'label'], { pk: ['a\x1fb', 'c'], cols: { items: 'x' } });
+    await assert.rejects(q.flush(), /failed after 5 retries/);
+    const dead = executed.find(({ sql }) => /kora_sql_deadletter/.test(sql));
+    assert.deepEqual(JSON.parse(dead.params[1]), ['a\x1fb', 'c']);
+});
+
+test('S4: accumulate mode sums numeric strings as numbers, never concatenates', async () => {
+    const { executed, pools } = makeFakePools();
+    const q = new WriteQueue(null, pools, new Stats(150, 50), CFG);
+    q.enqueue('accounts', 'id', { pk: 'A', cols: { balance: '5' } }, { mode: 'accumulate' });
+    q.enqueue('accounts', 'id', { pk: 'A', cols: { balance: '3' } }, { mode: 'accumulate' });
+    q.enqueue('accounts', 'id', { pk: 'A', cols: { balance: 2.5 } }, { mode: 'accumulate' });
+    await q.flush();
+    assert.deepEqual(executed[0].params, ['A', 10.5], "'5' + '3' must be 8, not '53'");
+    assert.equal(typeof executed[0].params[1], 'number');
+});
+
+test('S4: accumulate mode refuses non-numeric values synchronously and queues nothing', () => {
+    const { pools } = makeFakePools();
+    const q = new WriteQueue(null, pools, new Stats(150, 50), CFG);
+    for (const bad of ['x', '5x', '', ' ', '0x10', null, undefined, true, {}, [], NaN, Infinity, '1e999']) {
+        assert.throws(() => q.enqueue('accounts', 'id', { pk: 'A', cols: { balance: bad } }, { mode: 'accumulate' }),
+            /accumulate mode needs a finite number/, String(bad));
+    }
+    // One bad row rejects the whole enqueueMany call.
+    assert.throws(() => q.enqueueMany('accounts', 'id', [
+        { pk: 'A', cols: { balance: 1 } },
+        { pk: 'B', cols: { balance: 'oops' } },
+    ], { mode: 'accumulate' }), /accumulate mode/);
+    assert.equal(q.pendingRowCount, 0);
+    assert.equal(q.pending.size, 0);
+});
+
+test('S2: table, conflict key and column names must be plain identifiers', () => {
+    const { pools } = makeFakePools();
+    const q = new WriteQueue(null, pools, new Stats(150, 50), CFG);
+    const row = { pk: 'A', cols: { money: 1 } };
+    assert.throws(() => q.enqueue('players.money', 'citizenid', row), /invalid table name/);
+    assert.throws(() => q.enqueue('players`; DROP TABLE x; --', 'citizenid', row), /invalid table name/);
+    assert.throws(() => q.enqueue('players', 'citizen id', row), /invalid conflict key/);
+    assert.throws(() => q.enqueue('players', [], row), /invalid conflict key/);
+    assert.throws(() => q.enqueue('players', 'citizenid', { pk: 'A', cols: { 'players.money': 1 } }), /invalid column name/);
+    assert.throws(() => q.enqueue('players', 'citizenid', { pk: 'A', cols: { 'a`b': 1 } }), /invalid column name/);
+    assert.throws(() => q.enqueue('players', 'citizenid', { pk: 'A', cols: { CitizenID: 'B' } }), /conflict key column/);
+    assert.throws(() => q.enqueue('players', 'citizenid', { pk: 'A', cols: {} }), /no columns/);
+    assert.throws(() => q.enqueue('players', 'citizenid', { pk: 'A' }), /must be \{ pk/);
+    assert.throws(() => q.enqueue('players', 'citizenid', row, { mode: 'sum' }), /unsupported mode/);
+    assert.equal(q.pendingRowCount, 0);
+});
+
+test('S2: allowedColumns rejects mass-assigned columns from forwarded client data', () => {
+    const { pools } = makeFakePools();
+    const q = new WriteQueue(null, pools, new Stats(150, 50), CFG);
+    const opts = { allowedColumns: ['settings', 'Metadata'] };
+    q.enqueue('players', 'citizenid', { pk: 'A', cols: { settings: '{}', metadata: '{}' } }, opts);
+    assert.throws(() => q.enqueue('players', 'citizenid', { pk: 'A', cols: { settings: '{}', money: 1e9 } }, opts),
+        /players\.money is not in allowedColumns/);
+    assert.equal(q.pending.get('players').rows.get(pkKey('A')).cols.money, undefined);
+});
+
+test('P5: rows are written in primary-key order, numerically for integer keys', async () => {
+    const { executed, pools } = makeFakePools();
+    const q = new WriteQueue(null, pools, new Stats(150, 50), CFG);
+    q.enqueueMany('vehicles', 'id', [10, 9, '100', 2, 'B', 'A'].map((pk) => ({ pk, cols: { v: 1 } })));
+    await q.flush();
+    assert.deepEqual(executed[0].params.filter((_, i) => i % 2 === 0), [2, 9, 10, '100', 'A', 'B']);
+    assert.ok(comparePk({ pk: ['a', 2] }, { pk: ['a', 10] }) < 0, 'composite keys compare componentwise');
+});
+
+test('P6: a deterministic error is not retried; the chunk is bisected so only the bad row dead-letters', async (t) => {
+    const { executed, pools } = makeFakePools();
+    let attempts = 0;
+    const execute = pools.write.execute;
+    pools.write.execute = async (sql, params) => {
+        if (!/kora_sql_deadletter/.test(sql)) {
+            attempts++;
+            if (params.includes('TOO_LONG')) throw deterministic('ER_DATA_TOO_LONG');
+        }
+        return execute(sql, params);
+    };
+    const stats = new Stats(150, 50);
+    const q = new WriteQueue(null, pools, stats, { ...CFG, flushInterval: 60000 });
+    t.after(() => clearTimeout(q.timer));
+    const rows = ['A', 'B', 'C', 'D', 'E'].map((pk) => ({ pk, cols: { name: pk === 'C' ? 'TOO_LONG' : 'ok' } }));
+    q.enqueueMany('players', 'citizenid', rows);
+    const started = Date.now();
+    await assert.rejects(q.flush(), /ER_DATA_TOO_LONG\); 1 row\(s\) were dead-lettered/);
+    assert.ok(Date.now() - started < 500, 'no exponential backoff for a deterministic error');
+
+    const written = executed.filter(({ sql }) => !/kora_sql_deadletter/.test(sql))
+        .flatMap(({ params }) => params.filter((_, i) => i % 2 === 0));
+    assert.deepEqual(written.sort(), ['A', 'B', 'D', 'E'], 'every healthy row is still written');
+    const dead = executed.filter(({ sql }) => /kora_sql_deadletter/.test(sql));
+    assert.equal(dead.length, 1);
+    assert.equal(dead[0].params[1], 'C');
+    assert.equal(stats.queue.deadLettered, 1);
+    assert.equal(stats.queue.rowsWritten, 4);
+    assert.ok(attempts <= 7, `bisection, not retries (${attempts} attempts)`);
+    assert.equal(q.pendingRowCount, 0, 'nothing stale is left pending');
+});
+
+test('P6: transient errors keep the retry path; error classification', () => {
+    assert.equal(isRetryableWriteError(deterministic('ER_LOCK_DEADLOCK')), true);
+    assert.equal(isRetryableWriteError(deterministic('ER_LOCK_WAIT_TIMEOUT')), true);
+    assert.equal(isRetryableWriteError(new Error('unknown')), true);
+    assert.equal(isRetryableWriteError(Object.assign(deterministic('ER_BAD_FIELD_ERROR'), { fatal: true })), true);
+    assert.equal(isRetryableWriteError(deterministic('ER_BAD_FIELD_ERROR')), false);
+    assert.equal(isRetryableWriteError(deterministic('ER_BAD_NULL_ERROR')), false);
+});
+
+test('P6: a multi-row dead-letter is one INSERT', async () => {
+    const { executed, pools } = makeFakePools();
+    const q = new WriteQueue(null, pools, new Stats(150, 50), CFG);
+    // Bisection ends at single rows; exercise the multi-row form directly.
+    await q._deadLetter('missing', [{ pk: 'A', cols: { v: 1 } }, { pk: ['x', 'y'], cols: { v: 2 } }], deterministic('ER_NO_SUCH_TABLE'));
+    assert.equal(executed.length, 1);
+    assert.match(executed[0].sql, /VALUES \(\?,\?,\?,\?,NOW\(\)\),\(\?,\?,\?,\?,NOW\(\)\)$/);
+    assert.deepEqual(executed[0].params.filter((_, i) => i % 4 === 1), ['A', '["x","y"]']);
+});
+
+test('P7: a conflict key without a matching PRIMARY/UNIQUE index is reported once', async () => {
+    const { pools } = makeFakePools();
+    const queried = [];
+    pools.read = { query: async (sql, params) => {
+        queried.push(params[0]);
+        if (params[0] === 'good') return [[{ INDEX_NAME: 'PRIMARY', COLUMN_NAME: 'id' }], []];
+        return [[{ INDEX_NAME: 'uk_other', COLUMN_NAME: 'other' }], []];
+    } };
+    const log = require('../../server/js/logger.js');
+    const warnings = [];
+    const warn = log.warn;
+    log.warn = (tag, msg) => warnings.push(msg);
+    try {
+        const q = new WriteQueue(null, pools, new Stats(150, 50), { ...CFG, verifyConflictKeys: true });
+        q.enqueue('good', 'id', { pk: 1, cols: { v: 1 } });
+        q.enqueue('bad', 'citizenid', { pk: 'A', cols: { v: 1 } });
+        q.enqueue('bad', 'citizenid', { pk: 'B', cols: { v: 1 } });
+        await nextTurn();
+        await nextTurn();
+        assert.deepEqual(queried, ['good', 'bad'], 'verified once per table and key');
+        assert.equal(warnings.length, 1);
+        assert.match(warnings[0], /conflict key \(citizenid\) on bad is not a PRIMARY or UNIQUE index/);
+        await q.flush();
+    } finally {
+        log.warn = warn;
+    }
+    assert.equal(hasUniqueIndexOn([{ INDEX_NAME: 'uk', COLUMN_NAME: 'B' }, { INDEX_NAME: 'uk', COLUMN_NAME: 'a' }], ['a', 'b']), true);
+    assert.equal(hasUniqueIndexOn([{ INDEX_NAME: 'uk', COLUMN_NAME: 'a' }], ['a', 'b']), false, 'a prefix is not the same key');
+});
+
+test('P3: the flush writes on the dedicated flush pool when one exists', async () => {
+    const { pools } = makeFakePools();
+    const flushed = [];
+    pools.flush = { execute: async (sql, params) => { flushed.push(params); return [{ affectedRows: 1 }]; } };
+    pools.write = { ...pools.write, execute: async () => assert.fail('the write pool must not carry the flush') };
+    const q = new WriteQueue(null, pools, new Stats(150, 50), CFG);
+    q.enqueue('players', 'citizenid', { pk: 'A', cols: { money: 1 } });
+    await q.flush();
+    assert.deepEqual(flushed, [['A', 1]]);
+});
+
+test('P10: enqueueMany with immediate priority flushes once, not once per row', async (t) => {
+    const { executed, pools } = makeFakePools();
+    const q = new WriteQueue(null, pools, new Stats(150, 50), { ...CFG, flushInterval: 60000 });
+    t.after(() => clearTimeout(q.timer));
+    q.enqueueMany('players', 'citizenid', [1, 2, 3, 4].map((n) => ({ pk: `P${n}`, cols: { v: n } })), { priority: 'immediate' });
+    await q.flush('players');
+    assert.equal(executed.length, 1, 'one statement for the whole batch');
 });

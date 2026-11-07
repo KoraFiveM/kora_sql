@@ -7,15 +7,48 @@
 // The "one query, many param sets" form is the one people most often forget is
 // supported (see docs.md); it maps cleanly onto looping the same prepared
 // statement on the pinned connection.
+//
+// Every statement goes through execute.js's runOnConnection(): bound
+// statements are prepared (cached per connection, bind values inert), with
+// the shared unpreparable fallback; parameter-less statements use the text
+// protocol, exactly as ad-hoc queries do.
 
 'use strict';
 
-const { normalizeParams, normalizeNamedPlaceholders } = require('./execute');
+const { normalizeParams, normalizeNamedPlaceholders, runOnConnection } = require('./execute');
 
 class TransactionRunner {
-    constructor(pools) {
+    // opts.statements: the shared StatementCache (unpreparable marks).
+    // opts.maxStartTransactions: concurrent startTransaction callbacks allowed
+    // to pin a write connection; later callers wait for a slot.
+    constructor(pools, opts = {}) {
         this.pools = pools;
+        this.statements = opts.statements || null;
         this.checkedInFlight = new Map();
+        this.startLimit = opts.maxStartTransactions > 0 ? opts.maxStartTransactions : Infinity;
+        this.startActive = 0;
+        this.startWaiters = [];
+    }
+
+    _run(conn, st) {
+        return runOnConnection(conn, st.sql, st.params, this.statements);
+    }
+
+    // A slot-limited semaphore for startTransaction: each callback can hold a
+    // write connection for up to 30 s, so an unbounded number of them could
+    // occupy the whole write pool.
+    _acquireStartSlot() {
+        if (this.startActive < this.startLimit) {
+            this.startActive++;
+            return Promise.resolve();
+        }
+        return new Promise((resolve) => this.startWaiters.push(resolve));
+    }
+
+    _releaseStartSlot() {
+        const next = this.startWaiters.shift();
+        if (next) next();
+        else this.startActive--;
     }
 
     // Expected row counts are business preconditions, not merely SQL success.
@@ -81,8 +114,7 @@ class TransactionRunner {
         try {
             await conn.beginTransaction();
             for (; index < statements.length; index++) {
-                const st = statements[index];
-                const [result] = await conn.query(st.sql, st.params);
+                const [result] = await this._run(conn, statements[index]);
                 const count = Array.isArray(result) ? result.length : result.affectedRows;
                 if (queries[index].expectedRows !== undefined && count !== queries[index].expectedRows) {
                     const err = new Error('Transaction precondition changed');
@@ -111,8 +143,8 @@ class TransactionRunner {
 
     // Normalise oxmysql's two argument shapes into an array of {sql, params}.
     //
-    // These run through conn.execute() on a pinned connection rather than the
-    // Executor, so normalizeParams has to be applied here too -- otherwise a
+    // These run on a pinned connection rather than through the Executor, so
+    // normalizeParams has to be applied here too -- otherwise a
     // holed Lua param array reaches mysql2 as undefined inside a transaction,
     // where the failure also rolls back every sibling statement.
     _normalise(queries, maybeParams) {
@@ -157,7 +189,7 @@ class TransactionRunner {
         try {
             await conn.beginTransaction();
             for (const st of statements) {
-                await conn.query(st.sql, st.params);
+                await this._run(conn, st);
             }
             await conn.commit();
             return true;
@@ -189,6 +221,15 @@ class TransactionRunner {
     async startTransaction(callback) {
         if (typeof callback !== 'function') throw new TypeError('startTransaction requires a callback');
 
+        await this._acquireStartSlot();
+        try {
+            return await this._startTransaction(callback);
+        } finally {
+            this._releaseStartSlot();
+        }
+    }
+
+    async _startTransaction(callback) {
         const conn = await this.pools.write.getConnection();
         let closed = false;
         let discard = false;
@@ -208,7 +249,7 @@ class TransactionRunner {
                 if (closed) throw new Error('Connection used by transaction timed out after 30 seconds.');
                 const normalized = normalizeNamedPlaceholders(sql, params);
                 const [result] = await Promise.race([
-                    conn.query(normalized.sql, normalizeParams(normalized.params)), deadline,
+                    this._run(conn, { sql: normalized.sql, params: normalizeParams(normalized.params) }), deadline,
                 ]);
                 if (closed) throw new Error('Connection used by transaction timed out after 30 seconds.');
                 return result;
@@ -254,7 +295,7 @@ class TransactionRunner {
         const results = [];
         try {
             for (const st of statements) {
-                const [r] = await conn.execute(st.sql, st.params);
+                const [r] = await this._run(conn, st);
                 results.push(r);
             }
             return results;
