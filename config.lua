@@ -1,25 +1,18 @@
--- Lua-side behaviour ONLY. Everything the JS pool needs at boot (connection
--- string, pool sizes, cache sizes, flush timing) is read from CONVARS in
--- server/js/config.js, because the Node host cannot read this table. See
--- AGENTS.md "Configuration split" for why.
-
 Config = Config or {}
 
 Config.compat = {
-    oxmysql = true,            -- register the exports.oxmysql:* identity hijack
-    mysqlAsync = true,         -- register exports['mysql-async']:* and the MySQL global
-    ghmattimysql = true,       -- register exports.ghmattimysql:*
-    installMySQLGlobal = true, -- create the mysql-async `MySQL` global in a consumer VM that loads @kora_sql/lib/MySQL.lua
-    warnOnSync = true,         -- print once per calling resource when a blocking *Sync API is used
+    oxmysql = true,
+    mysqlAsync = true,
+    ghmattimysql = true,
+    installMySQLGlobal = true,
+    warnOnSync = true,
 }
 
 Config.sql = {
-    awaitTimeout = 30000,      -- ms Kora.sql.* waits before returning an error; read from the CALLING resource's Config.sql (see docs.md)
-    readyTimeout = 60000,      -- ms Kora.sql.ready() waits for the pool before giving up
+    awaitTimeout = 30000,
+    readyTimeout = 60000,
 }
 
--- Registers kora_sql's Lua-side settings with kora_lib. Pool boot options remain
--- server convars because the Node host cannot read this Lua table.
 Config.compat.oxmysql = Kora.config.boolean(Config.compat.oxmysql, { label = 'Support oxmysql scripts', advanced = false })
 Config.compat.mysqlAsync = Kora.config.boolean(Config.compat.mysqlAsync, { label = 'Support mysql-async scripts', advanced = false })
 Config.compat.ghmattimysql = Kora.config.boolean(Config.compat.ghmattimysql, { label = 'Support ghmattimysql scripts', advanced = false })

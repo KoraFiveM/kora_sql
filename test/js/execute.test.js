@@ -64,8 +64,6 @@ test('rawExecute returns oxmysql raw result values and supports multiple bind se
         [{ value: 2 }],
     ]);
 
-    // mysql2 fields metadata is internal; oxmysql's rawExecute exposes only
-    // the raw row/result values and flattens batch results.
     assert.deepEqual(await executor.rawExecute('SELECT ? AS value', [[1], [2]]), [
         [{ value: 1 }],
         [{ value: 2 }],

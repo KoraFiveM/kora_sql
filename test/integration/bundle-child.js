@@ -1,9 +1,5 @@
 'use strict';
 
-// Runs in a child because mysql2's live pools intentionally keep the process
-// open. The parent test checks this exact committed bundle, then the child
-// exits after one real round trip.
-
 const registered = new Map();
 const dsn = process.env.QBSQL_TEST_DSN;
 

@@ -1,18 +1,7 @@
-// oxmysql-compatible mysql2 typeCast functions, ported from oxmysql's
-// src/utils/typeCast.ts. Applied ONLY on the oxmysql compatibility path (the
-// Executor's `oxTypeCast` view, see execute.js); kora's native API keeps mysql2's
-// default shapes.
-//
-// One deliberate addition: JSON columns are returned as strings. Upstream gets
-// that from the mysql2 connection option `jsonStrings: true`, which is a
-// per-pool setting; doing it in the typeCast keeps kora's pools (and the native
-// API) untouched while oxmysql callers still receive the raw JSON text.
-
 'use strict';
 
 const BINARY_CHARSET = 63;
 
-// Execute (prepared statement) path: dates -> ms since epoch, nothing else.
 function typeCastExecute(field, next) {
     switch (field.type) {
         case 'DATETIME':
@@ -34,7 +23,6 @@ function typeCastExecute(field, next) {
     }
 }
 
-// Query (text protocol) path: mysql-async compatible typecasting.
 function typeCast(field, next) {
     switch (field.type) {
         case 'DATETIME':

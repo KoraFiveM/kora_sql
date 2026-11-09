@@ -1,6 +1,3 @@
-// Pool availability guards (REVIEW.md S6): acquire timeout and the
-// server-side read statement limit. No database: fake mysql2 pools.
-
 'use strict';
 
 const test = require('node:test');
@@ -38,7 +35,6 @@ test('S6: a call waiting for a busy pool fails after the acquire timeout', async
     t.mock.timers.tick(1);
     await assert.rejects(pending, (err) => err.code === 'QBSQL_ACQUIRE_TIMEOUT' && /within 1000ms/.test(err.message));
 
-    // The connection that arrives late goes straight back to the pool.
     pool.waiting.shift()(conn('late'));
     await Promise.resolve();
     assert.deepEqual(pool.released, ['late']);

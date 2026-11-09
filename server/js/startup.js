@@ -1,9 +1,3 @@
-// Startup connection retry policy.
-//
-// FXServer and MySQL are often started together. MySQL can still be opening
-// its listener when resources begin, so a single failed probe must not leave
-// kora_sql permanently unusable until the whole server is restarted.
-
 'use strict';
 
 const TRANSIENT_CODES = new Set([

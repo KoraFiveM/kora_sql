@@ -1,7 +1,3 @@
--- ghmattimysql drop-in compatibility. A small surface -- execute/scalar +
--- transaction and their Sync variants -- but cheap to provide and it keeps
--- older resources working unmodified.
-
 if not (Config and Config.compat and Config.compat.ghmattimysql) then return end
 
 local function provideExport(providedResource, exportName, func)
@@ -20,8 +16,6 @@ end
 
 local function asyncCall(jsName)
     return function(query, params, cb)
-        -- (query, cb) is a common legacy call shape; shift it so the callback is
-        -- not sent as the bind list (which also drops resource attribution).
         if cb == nil and isCallable(params) then cb, params = params, nil end
         local resource = GetInvokingResource() or GetCurrentResourceName()
         exports.kora_sql[jsName](exports.kora_sql, query, params or {}, cb, resource)
@@ -42,7 +36,7 @@ local function syncCall(jsName)
 end
 
 local registrations = {
-    execute     = asyncCall('query'),   -- ghmatti execute returns rows
+    execute     = asyncCall('query'),
     executeSync = syncCall('query'),
     scalar      = asyncCall('scalar'),
     scalarSync  = syncCall('scalar'),

@@ -1,5 +1,3 @@
-// Stats fingerprinting and bounds (REVIEW.md P2). Pure; no database.
-
 'use strict';
 
 const test = require('node:test');
@@ -36,8 +34,8 @@ test('P2: recently used fingerprints survive eviction (LRU)', () => {
     const stats = new Stats(1e9, 10, 2);
     stats.record('SELECT 1', 1, 0, false);
     stats.record('SELECT a FROM b', 1, 0, false);
-    stats.record('SELECT 2', 1, 0, false);           // same fingerprint as SELECT 1 -> touched
-    stats.record('SELECT c FROM d', 1, 0, false);    // evicts SELECT a FROM b
+    stats.record('SELECT 2', 1, 0, false);
+    stats.record('SELECT c FROM d', 1, 0, false);
     assert.deepEqual([...stats.byFingerprint.keys()], ['SELECT ?', 'SELECT c FROM d']);
 });
 

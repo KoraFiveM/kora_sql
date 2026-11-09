@@ -116,7 +116,6 @@ test('transaction accepts every oxmysql query shape and normalizes named binds',
     ], { '@value': 1 }, 'consumer');
 
     assert.equal(ok, true);
-    // Bound statements run prepared (binary protocol), like ad-hoc queries.
     assert.deepEqual(calls, [
         ['begin'],
         ['execute', 'UPDATE a SET value = :value', { '@value': 1, value: 1 }],
@@ -148,14 +147,13 @@ test('S8/P9: transactions prepare bound statements, fall back once for unprepara
     assert.equal(await runner.transaction([[sql, [1]], ['UPDATE a SET v = 1', []], ['UPDATE b SET v = ?', [2]]], [], 'consumer'), true);
     assert.equal(await runner.transaction([[sql, [2]]], [], 'consumer'), true);
     assert.deepEqual(calls.filter(([kind]) => kind === 'execute' || kind === 'query'), [
-        ['execute', sql], ['query', sql],                 // failed prepare paid once...
-        ['query', 'UPDATE a SET v = 1'],                  // parameter-less: text protocol
+        ['execute', sql], ['query', sql],
+        ['query', 'UPDATE a SET v = 1'],
         ['execute', 'UPDATE b SET v = ?'],
-        ['query', sql],                                   // ...and remembered afterwards
+        ['query', sql],
     ]);
     assert.equal(statements.isPreparable(sql), false);
 
-    // batch() gets the same fallback instead of failing on an unpreparable statement.
     const results = await runner.batch([[sql, [3]]]);
     assert.equal(results.length, 1);
 });
@@ -306,9 +304,6 @@ test('transaction discards a connection whose rollback failed instead of returni
     }
 });
 
-// REVIEW2 H1: array binds must keep expanding (text protocol) inside
-// transactions, startTransaction and batch -- the binary protocol would
-// JSON-encode `IN (?)` into one string and silently match nothing.
 test('H1: statements with an array bind use the text protocol in transaction/startTransaction/batch', async () => {
     const { runner, calls } = harness();
     await runner.transaction([

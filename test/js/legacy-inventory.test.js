@@ -16,7 +16,6 @@ function fixture(options = {}) {
         request: options.request || ((callback) => queueMicrotask(() => callback(1, null))),
         onStop: (callback) => listeners.push(callback),
     });
-    // Bound statements arrive via execute(), parameter-less ones via query().
     const run = async (sql, params) => {
         calls.push({ sql, params });
         return [{ affectedRows: 7, insertId: 0 }, undefined];

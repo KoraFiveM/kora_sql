@@ -1,26 +1,8 @@
-// Transaction and batch runners on a single pinned connection.
-//
-// oxmysql exposes two related shapes and this module backs both:
-//   * transaction(statements)         -- run all inside BEGIN/COMMIT, rollback on any error
-//   * transaction(sql, [paramsList])  -- one statement, many parameter sets, all in one txn
-//   * batch(statements)               -- same connection, NO transaction wrapper
-// The "one query, many param sets" form is the one people most often forget is
-// supported (see docs.md); it maps cleanly onto looping the same prepared
-// statement on the pinned connection.
-//
-// Every statement goes through execute.js's runOnConnection(): bound
-// statements are prepared (cached per connection, bind values inert), with
-// the shared unpreparable fallback; parameter-less statements use the text
-// protocol, exactly as ad-hoc queries do.
-
 'use strict';
 
 const { normalizeParams, normalizeNamedPlaceholders, runOnConnection } = require('./execute');
 
 class TransactionRunner {
-    // opts.statements: the shared StatementCache (unpreparable marks).
-    // opts.maxStartTransactions: concurrent startTransaction callbacks allowed
-    // to pin a write connection; later callers wait for a slot.
     constructor(pools, opts = {}) {
         this.pools = pools;
         this.statements = opts.statements || null;
@@ -34,9 +16,6 @@ class TransactionRunner {
         return runOnConnection(conn, st.sql, st.params, this.statements);
     }
 
-    // A slot-limited semaphore for startTransaction: each callback can hold a
-    // write connection for up to 30 s, so an unbounded number of them could
-    // occupy the whole write pool.
     _acquireStartSlot() {
         if (this.startActive < this.startLimit) {
             this.startActive++;
@@ -51,7 +30,6 @@ class TransactionRunner {
         else this.startActive--;
     }
 
-    // Expected row counts are business preconditions, not merely SQL success.
     transactionChecked(queries, operation) {
         if (!operation) return this._transactionChecked(queries);
         if (typeof operation.key !== 'string' || typeof operation.fingerprint !== 'string') {
@@ -141,15 +119,8 @@ class TransactionRunner {
         }
     }
 
-    // Normalise oxmysql's two argument shapes into an array of {sql, params}.
-    //
-    // These run on a pinned connection rather than through the Executor, so
-    // normalizeParams has to be applied here too -- otherwise a
-    // holed Lua param array reaches mysql2 as undefined inside a transaction,
-    // where the failure also rolls back every sibling statement.
     _normalise(queries, maybeParams) {
         if (typeof queries === 'string') {
-            // transaction(sql, [ [p1], [p2], ... ]) -- one statement, many param sets.
             const sql = queries;
             const paramSets = Array.isArray(maybeParams) ? maybeParams : [maybeParams || []];
             return paramSets.map((params) => {
@@ -160,10 +131,6 @@ class TransactionRunner {
         if (!Array.isArray(queries)) {
             throw new TypeError(`Transaction queries must be array, received '${typeof queries}'.`);
         }
-        // Current oxmysql accepts all three established transaction shapes:
-        //   { 'SQL', 'SQL' }, sharedParams
-        //   { { query = 'SQL', values|parameters = {...} }, ... }
-        //   { { 'SQL', {...} }, ... }
         return queries.map((q) => {
             let sql, params;
             if (Array.isArray(q)) {
@@ -194,8 +161,6 @@ class TransactionRunner {
             await conn.commit();
             return true;
         } catch (err) {
-            // A connection whose ROLLBACK failed may still hold the open
-            // transaction; never hand it back to the pool.
             try { await conn.rollback(); } catch (_) { discard = true; }
             console.error(`qbsql transaction rolled back: ${err.message}`);
             if (typeof globalThis.TriggerEvent === 'function') {
@@ -214,10 +179,6 @@ class TransactionRunner {
         }
     }
 
-    // Experimental oxmysql startTransaction contract. The callback receives a
-    // query function pinned to this connection and decides whether to commit
-    // (anything except explicit false) or roll back (false). A 30s deadline
-    // matches oxmysql and prevents a leaked callback from pinning a pool slot.
     async startTransaction(callback) {
         if (typeof callback !== 'function') throw new TypeError('startTransaction requires a callback');
 
@@ -281,14 +242,11 @@ class TransactionRunner {
         } finally {
             clearTimeout(timeout);
             closed = true;
-            // A stalled command can block ROLLBACK too; disconnect rather than reuse it.
             if (discard) conn.destroy();
             else conn.release();
         }
     }
 
-    // batch: same pinned connection, sequential, NO transaction. Returns the
-    // per-statement results.
     async batch(queries, maybeParams) {
         const statements = this._normalise(queries, maybeParams);
         const conn = await this.pools.write.getConnection();

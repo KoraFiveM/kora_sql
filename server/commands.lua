@@ -1,16 +1,7 @@
--- /qbsql console commands: ping | stats | slow | queue | flush | bench
---
--- Registered as ace-gated (`command.qbsql`) so they work from the server
--- console (which is allowed everything) and from an admin, but not from an
--- arbitrary client. The bench command is the deliverable that turns "faster
--- than oxmysql" from a claim into a printed number.
-
 local runBench
 
 local function fmt(n) return ('%.2f'):format(n or 0) end
 
--- The stats export throws until the JS side has loaded its config (e.g. no
--- connection string), so report that instead of a Lua error.
 local function readStats()
     local ok, s = pcall(function() return exports.kora_sql:stats() end)
     if ok and type(s) == 'table' and s.queries and s.queue then return s end
@@ -64,7 +55,6 @@ RegisterCommand('qbsql', function(source, args)
         end
 
     elseif sub == 'queue' then
-        -- Depth is JS-side; expose via a tiny query on stats plus a direct call.
         local s = readStats()
         if not s then return end
         print('^5[qbsql] queue^7')
@@ -83,9 +73,6 @@ RegisterCommand('qbsql', function(source, args)
     end
 end, false)
 
--- A/B benchmark: N individual execute() writes vs one enqueueMany + flush of the
--- same N rows, on a scratch table. Prints wall-clock, round trips, and boundary
--- crossings for each so the coalescing win is a measured fact.
 runBench = function(n)
     if not Ready.await(5000) then print('^1[qbsql]^7 bench: not ready') return end
     local res = GetCurrentResourceName()
@@ -106,7 +93,6 @@ runBench = function(n)
     ) ENGINE=InnoDB]], {})
     await('execute', 'TRUNCATE `kora_sql_bench`', {})
 
-    -- Path A: N individual upserts, each its own boundary crossing + round trip.
     local statsBefore = exports.kora_sql:stats()
     local a0 = GetGameTimer()
     for i = 1, n do
@@ -116,7 +102,6 @@ runBench = function(n)
     end
     local aMs = GetGameTimer() - a0
 
-    -- Path B: one enqueueMany of N rows + one flush.
     await('execute', 'TRUNCATE `kora_sql_bench`', {})
     local rows = {}
     for i = 1, n do rows[i] = { pk = ('b%d'):format(i), cols = { v = i } } end

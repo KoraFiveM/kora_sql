@@ -1,7 +1,3 @@
--- mysql-async deployment: kora_sql no longer provides the name; stubs/mysql-async
--- is a standalone resource whose lib/MySQL.lua is loaded into the consumer VM
--- exactly like a stock `@mysql-async/lib/MySQL.lua` include, and the raw
--- exports['mysql-async']:mysql_* surface forwards to kora_sql.
 local h = dofile('test/harness.lua')
 local mocks = dofile('test/mocks.lua')
 local handle = mocks.install()
@@ -69,7 +65,6 @@ h.test('raw (query, cb) calls shift the callback out of the params slot', functi
     h.assertEqual(call.args[4], 'legacy')
 end)
 
--- Consumer VM: load the stub include the way FXServer resolves @mysql-async/...
 GetNumResourceMetadata = function() return 0 end
 GetResourceMetadata = function() return nil end
 Citizen.CreateThreadNow = function(fn) fn() end

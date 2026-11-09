@@ -1,19 +1,3 @@
-// Declarative table setup. A resource describes a table as data (columns, keys,
-// foreign keys, seed rows); this module creates it if missing and, when it exists,
-// ADDS whatever is missing. It never drops anything, and never alters an
-// existing column unless that column opts in with `modify = true` and the
-// change cannot lose data: it WIDENS the type (see isWidening), or tightens
-// NULL to NOT NULL on a column that holds no NULLs. A table with a recorded
-// owner (kora_sql_schema_owners, written when ensureTable created it) is only
-// modified by that owner; a table with no recorded owner (it predates
-// ownership tracking) keeps the pre-ownership behaviour -- any resource's safe
-// modify applies -- and is never claimed by a modify. Every refused or
-// unowned modify is logged at warn, naming the resource.
-//
-// Everything interpolated into DDL is validated first (identifiers, types,
-// keywords). Values (seed rows) are always bound parameters; column DEFAULTs
-// cannot be bound in DDL, so they go through mysql2's escape().
-
 'use strict';
 
 const { escape } = require('mysql2');
@@ -43,7 +27,6 @@ function assertNames(value, what) {
     value.forEach((name) => assertIdent(name, what));
 }
 
-// Normalises (and validates) a spec. Returns a fresh object; the input is untouched.
 function validateSpec(input, defaults = {}) {
     if (!input || typeof input !== 'object') throw new Error('qbsql schema: spec must be a table');
     assertIdent(input.name, 'table name');
@@ -69,10 +52,6 @@ function validateSpec(input, defaults = {}) {
     assertIdent(spec.engine, 'engine');
     assertIdent(spec.charset, 'charset');
     if (spec.collate !== null && !COLLATION.test(spec.collate)) throw new Error(`qbsql schema: invalid collation '${spec.collate}'`);
-    // A table created with no collate gets the server's charset default (utf8mb4_0900_ai_ci
-    // on MySQL 8), which then fails joins against Kora's utf8mb4_unicode_ci tables with
-    // "Illegal mix of collations". Only CREATE TABLE uses this; existing tables are
-    // never compared against it.
     const createCollate = typeof defaults.createCollate === 'string' ? defaults.createCollate : '';
     if (spec.collate === null && COLLATION.test(createCollate)
         && createCollate.toLowerCase().startsWith(spec.charset.toLowerCase() + '_')) {
@@ -144,8 +123,6 @@ function validateSpec(input, defaults = {}) {
     return spec;
 }
 
-// The type as MariaDB/MySQL report it in information_schema (lowercase, with
-// unsigned suffix) so we can compare without false warnings.
 function expectedType(col) {
     let type = col.type.toLowerCase();
     if (type === 'enum' || type === 'set') type += '(' + col.values.map((v) => escape(v)).join(',') + ')';
@@ -153,7 +130,6 @@ function expectedType(col) {
     return normaliseType(type);
 }
 
-// Integer display widths (int(11)) are reported by MariaDB but not MySQL 8; boolean is tinyint(1).
 function normaliseType(type) {
     return String(type).toLowerCase()
         .replace(/^(?:boolean|bool)$/, 'tinyint(1)')
@@ -163,18 +139,15 @@ function normaliseType(type) {
         .replace(/\s+/g, ' ').trim();
 }
 
-// MariaDB stores JSON as longtext, so either spelling satisfies a json column.
 function typeMatches(want, got) {
     return want === got || (want === 'json' && got === 'longtext');
 }
 
 const INT_RANK = { tinyint: 1, smallint: 2, mediumint: 3, int: 4, bigint: 5 };
-// Decimal digits needed for every value of each integer type.
 const INT_DIGITS = { tinyint: 3, smallint: 5, mediumint: 8, int: 10, bigint: 20 };
 const TEXT_RANK = { tinytext: 1, text: 2, mediumtext: 3, longtext: 4 };
 const BLOB_RANK = { tinyblob: 1, blob: 2, mediumblob: 3, longblob: 4 };
 
-// "decimal(10,2) unsigned" -> { name: 'decimal', args: '10,2', unsigned: true }
 function parseColumnType(type) {
     const t = normaliseType(type);
     const unsigned = /\bunsigned\b/.test(t);
@@ -183,7 +156,6 @@ function parseColumnType(type) {
     return m ? { name: m[1], args: m[2], unsigned, zerofill } : null;
 }
 
-// enum('a','b''c') or enum('a','b\'c') -> ['a', "b'c"]
 function enumValues(args) {
     const out = [];
     const re = /'((?:[^'\\]|\\.|'')*)'/g;
@@ -192,27 +164,18 @@ function enumValues(args) {
     return out;
 }
 
-// True when changing a column from `got` to `want` (both information_schema
-// spellings) can neither truncate nor reject an existing value: a larger
-// integer of the same signedness, a longer string, a wider decimal, a
-// superset enum/set, a larger text/blob, more fractional-second digits, or
-// float to double. Anything else -- including every narrowing -- is refused.
 function isWidening(got, want) {
     if (got === want) return true;
     const a = parseColumnType(got);
     const b = parseColumnType(want);
     if (!a || !b || a.zerofill !== b.zerofill) return false;
-    // An unsigned integer fits a strictly larger signed one (int unsigned -> bigint).
     if (a.name in INT_RANK && b.name in INT_RANK && a.unsigned && !b.unsigned) return INT_RANK[b.name] > INT_RANK[a.name];
-    // An integer fits a decimal with enough integer digits (and the sign rule above).
     if (a.name in INT_RANK && ['decimal', 'numeric'].includes(b.name) && (b.unsigned === a.unsigned || !b.unsigned)) {
         const [bp, bs = 0] = String(b.args || '10,0').split(',').map(Number);
         return bp - bs >= INT_DIGITS[a.name];
     }
     if (a.unsigned !== b.unsigned) return false;
     if (a.name in INT_RANK && b.name in INT_RANK) return INT_RANK[b.name] >= INT_RANK[a.name];
-    // A string column fits TEXT (65535 bytes >= any varchar's byte length);
-    // TINYTEXT only when even 4-byte characters fit its 255 bytes.
     if ((a.name === 'char' || a.name === 'varchar') && b.name in TEXT_RANK) {
         return TEXT_RANK[b.name] >= 2 || Number(a.args || 1) * 4 <= 255;
     }
@@ -288,11 +251,6 @@ function buildCreate(spec) {
     return sql;
 }
 
-// actual = { columns: [{COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE}], indexes: [{INDEX_NAME, COLUMN_NAME, SEQ_IN_INDEX, NON_UNIQUE}], foreign: [{CONSTRAINT_NAME}] }
-// Returns ALTER statements for what is missing plus warnings for what differs.
-// `modifies` lists the MODIFY COLUMN statements (also in `statements`) so the
-// caller can withhold them when the resource does not own the table.
-// opts.allowModify (default true) = false turns every `modify` into a warning.
 function diff(spec, actual, opts = {}) {
     const allowModify = opts.allowModify !== false;
     const statements = [];
@@ -322,8 +280,6 @@ function diff(spec, actual, opts = {}) {
             if (!refused) {
                 const statement = alter(`MODIFY COLUMN ${columnDefinition(col, spec)}`);
                 statements.push(statement);
-                // NULL -> NOT NULL is safe only once no NULLs remain (checked
-                // by SchemaManager before the statement runs).
                 modifies.push({ column: col.name, statement, nullCheck: nullDiffers && !wantNull });
                 added.modified.push(col.name);
                 continue;
@@ -366,8 +322,6 @@ function diff(spec, actual, opts = {}) {
     return { statements, modifies, added, warnings };
 }
 
-// INSERT IGNORE keeps seeding idempotent and never overwrites edits made after
-// the first boot. Set seed.update = true to refresh the non-key columns instead.
 function buildSeed(spec) {
     if (!spec.seed || spec.seed.rows.length === 0) return null;
     const columns = spec.columns.map((c) => c.name).filter((name) => spec.seed.rows.some((r) => r[name] !== undefined));
@@ -392,8 +346,6 @@ function buildSeed(spec) {
 const ddl = (sql) => ({ sql, namedPlaceholders: false });
 
 class SchemaManager {
-    // defaults: { createCollate, allowModify (default true), ownersTable }.
-    // Without an ownersTable no resource owns anything, so `modify` is refused.
     constructor(pools, defaults = {}) {
         this.pools = pools;
         this.defaults = defaults;
@@ -402,14 +354,10 @@ class SchemaManager {
         this._tails = new Map();
     }
 
-    // information_schema reads go to the read pool, off the write pool the
-    // flush and transactions use.
     _readPool() {
         return this.pools.read || this.pools.write;
     }
 
-    // Record the creator of a table. Best effort: a failure only means the
-    // table stays unowned (pre-ownership modify behaviour).
     async _recordOwner(table, resource) {
         if (!this.ownersTable || !resource) return;
         try {
@@ -423,8 +371,6 @@ class SchemaManager {
         }
     }
 
-    // The recorded owner of `table`, or null when it has none (or ownership
-    // cannot be read). Never claims a table.
     async _ownerOf(table) {
         if (!this.ownersTable) return null;
         try {
@@ -437,7 +383,6 @@ class SchemaManager {
         }
     }
 
-    // True when `column` of `table` holds at least one NULL (or the check fails).
     async _hasNulls(table, column) {
         try {
             const [rows] = await this.pools.write.query(`SELECT 1 FROM ${q(table)} WHERE ${q(column)} IS NULL LIMIT 1`);
@@ -448,7 +393,6 @@ class SchemaManager {
         }
     }
 
-    // Serialise work per table so two resources racing on the same table do not interleave DDL.
     _serial(name, fn) {
         const tail = (this._tails.get(name) || Promise.resolve()).catch(() => {});
         const run = tail.then(fn);
@@ -489,7 +433,6 @@ class SchemaManager {
             } else {
                 const result = diff(spec, actual, { allowModify: this.allowModify });
                 const who = resource || 'unknown';
-                // Refused by diff (convar, extend, narrowing): say so at warn.
                 for (const w of result.warnings) {
                     if (/modify refused/.test(w)) log.warn('schema', `${who}: ${w}`);
                 }
@@ -537,7 +480,6 @@ class SchemaManager {
         });
     }
 
-    // Resolves once every named table exists, so a resource can wait for tables another resource creates.
     async awaitTables(names, timeoutMs, resource) {
         if (!Array.isArray(names) || names.length === 0 || names.some((n) => typeof n !== 'string' || !IDENT.test(n))) {
             throw new Error('qbsql schema: awaitTables expects a list of table names');
@@ -555,7 +497,6 @@ class SchemaManager {
         }
     }
 
-    // Runs in order so foreign key parents can be listed first. Stops at the first failure.
     async ensureTables(specs, resource) {
         if (!Array.isArray(specs)) throw new Error('qbsql schema: ensureTables expects a list of table specs');
         const reports = [];

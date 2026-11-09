@@ -1,21 +1,8 @@
-// Observability: per-fingerprint aggregates + a slow-query ring buffer + the
-// queue counters that prove the write-coalescing thesis.
-//
-// The FINGERPRINT is the SQL text with string and number literals replaced by
-// `?` and whitespace collapsed. kora's own code parameterises, but legacy
-// callers concatenate values into SQL (`... WHERE citizenid = '" .. cid .. "'`),
-// and keying by raw text would grow one entry per player forever. The map is
-// also capped: once full, the least recently used fingerprint is folded into
-// one `<other>` aggregate, so memory stays bounded whatever callers send.
-
 'use strict';
 
 const OTHER = '<other>';
 const TOP_N = 10;
 
-// Backticked identifiers are kept (a digit inside `col1` is not a literal);
-// quoted strings, hex and decimal numbers become `?`; `IN (?, ?, ...)` lists
-// collapse so a list's length does not create a new fingerprint.
 const LITERALS = /(`(?:[^`]|``)*`)|'(?:\\.|''|[^'\\])*'|"(?:\\.|""|[^"\\])*"|\b0x[0-9a-f]+\b|\b\d+(?:\.\d+)?(?:e[+-]?\d+)?\b/gi;
 function fingerprint(sql) {
     if (typeof sql !== 'string') return String(sql);
@@ -49,24 +36,20 @@ class Stats {
         this.slowRingSize = slowRing;
         this.maxFingerprints = Math.max(1, maxFingerprints || 2000);
 
-        // fingerprint -> aggregate, in least-recently-used order.
         this.byFingerprint = new Map();
-        // Raw SQL text -> fingerprint. Bounded; a miss just recomputes.
         this.fingerprintCache = new Map();
-        // Everything evicted from byFingerprint.
         this.other = null;
 
         this.slow = [];
         this.slowHead = 0;
 
-        // Queue counters -- the numbers that demonstrate coalescing works.
         this.queue = {
-            boundaryCrossings: 0,   // enqueue/enqueueMany calls from Lua
-            rowsEnqueued: 0,        // rows handed in
-            rowsWritten: 0,        // rows actually sent to MySQL (post-merge)
+            boundaryCrossings: 0,
+            rowsEnqueued: 0,
+            rowsWritten: 0,
             statementsIssued: 0,
             flushes: 0,
-            flushDurationMs: [],    // recent flush durations
+            flushDurationMs: [],
             deadLettered: 0,
             retries: 0,
         };
@@ -86,7 +69,6 @@ class Stats {
         const fp = this._fingerprint(sql);
         let agg = this.byFingerprint.get(fp);
         if (agg) {
-            // Move to the most-recently-used end.
             this.byFingerprint.delete(fp);
             this.byFingerprint.set(fp, agg);
         } else {
@@ -139,7 +121,6 @@ class Stats {
 
     summary(statementCache) {
         let totalCount = 0, totalMs = 0, totalErrors = 0;
-        // Bounded top-N by totalMs: one pass, no full sort of every fingerprint.
         const top = [];
         const consider = (sql, agg) => {
             totalCount += agg.count;
@@ -176,8 +157,6 @@ class Stats {
                 boundaryCrossings: q.boundaryCrossings,
                 rowsEnqueued: q.rowsEnqueued,
                 rowsWritten: q.rowsWritten,
-                // The headline number: rows callers handed us vs rows we
-                // actually wrote. > 1.0 means coalescing saved round trips.
                 coalesceRatio: q.rowsWritten ? q.rowsEnqueued / q.rowsWritten : 0,
                 statementsIssued: q.statementsIssued,
                 statementsPerFlush: q.flushes ? q.statementsIssued / q.flushes : 0,

@@ -1,9 +1,3 @@
-// Golden SQL assertions for the batched-upsert builder. These are byte-for-byte
-// string comparisons: the batch builder is where a silent data-corruption bug
-// would live, so the exact wire text is pinned here and any drift fails loudly.
-//
-// Run with:  node --test  (from the resource root)
-
 'use strict';
 
 const test = require('node:test');
@@ -65,8 +59,6 @@ test('assign / values / WITH padding to bucket 4 repeats an existing row', () =>
         sql,
         'INSERT INTO `players` (`citizenid`,`money`) VALUES (?,?),(?,?),(?,?),(?,?) ON DUPLICATE KEY UPDATE `money` = VALUES(`money`)'
     );
-    // The 4th group repeats the first row (ABC) -- a genuine no-op under
-    // last-write-wins assignment.
     assert.deepEqual(params, ['ABC', 'a', 'DEF', 'd', 'GHI', 'g', 'ABC', 'a']);
 });
 

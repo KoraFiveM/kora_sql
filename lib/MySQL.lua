@@ -1,7 +1,3 @@
--- oxmysql/mysql-async compatible MySQL global for consumer resources.
--- This file runs inside the consumer VM, so resource attribution is explicit
--- and every callback/promise is created in the same Lua runtime as its caller.
-
 local promise = promise
 local Await = Citizen.Await
 local resourceName = GetCurrentResourceName()
@@ -49,9 +45,6 @@ local function safeArgs(query, parameters, cb, transaction)
     return query, parameters, cb
 end
 
--- This global is the oxmysql/mysql-async API, so it uses the JS `ox*` variants
--- (oxmysql typeCast, gated by the `kora_sql_ox_typecast` convar). transaction
--- and the rest have no variant and keep their own names.
 local oxName = {
     query = 'oxQuery', single = 'oxSingle', scalar = 'oxScalar', insert = 'oxInsert',
     update = 'oxUpdate', prepare = 'oxPrepare', rawExecute = 'oxRawExecute',

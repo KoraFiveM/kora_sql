@@ -2,8 +2,6 @@
 
 const log = require('./logger');
 
-// Reviewed stock reads only. Native housing remains the sole write authority;
-// the original stock tables are an import archive, not a second live database.
 function stockRead(sql, params) {
     if (typeof sql !== 'string') return null;
     const text = sql.trim().replace(/;$/, '').trim()
@@ -38,14 +36,7 @@ function stockRead(sql, params) {
 
 function touchesStockTables(sql) {
     if (typeof sql !== 'string') return false;
-    // Mask values/comments before looking for table identifiers, so ordinary
-    // data mentioning a stock table never changes an unrelated query's route.
     const code = sql.replace(/'(?:\\.|''|[^'\\])*'|"(?:\\.|""|[^"\\])*"|\/\*[\s\S]*?\*\/|--[^\n]*(?:\n|$)|#[^\n]*(?:\n|$)/g, ' ');
-    // Any mention of either table name in the remaining SQL text. Anchoring on
-    // FROM/JOIN/UPDATE/INTO/TABLE missed `INSERT player_houses`, `REPLACE ...`,
-    // `TRUNCATE player_houses` and comma joins. This fails closed: a column or
-    // alias that happens to use one of these names is rejected rather than
-    // let through, which is the right direction for a guard.
     return /\b(?:houselocations|player_houses)\b/i.test(code);
 }
 
@@ -59,18 +50,11 @@ function createLegacyHousingBridge({ getState, request, onStop }) {
         for (const finish of [...pending]) finish(null, `${name} stopped during legacy housing read`);
     });
     return function legacyHousing(sql, params, resource) {
-        // The original export caller. exports.js derives it from
-        // GetInvokingResource() and only trusts a forwarded name when kora_sql's
-        // own compat shims made the call, so another resource cannot claim to be
-        // kora_housing. The owner must read its archive during import before it
-        // becomes ready.
         if (resource === 'kora_housing' || !touchesStockTables(sql)) return null;
         const state = getState();
         if (state === 'started' || state === 'starting') selected = true;
         else if (!selected) return null;
         else return Promise.reject(new Error('Native housing stopped; stock tables are archival'));
-        // One log per calling resource, so a query that merely mentions a stock
-        // table name (a column or alias) is easy to trace to its caller.
         const who = resource || 'unknown';
         if (!routed.has(who) && routed.size < 256) {
             routed.add(who);
@@ -85,7 +69,6 @@ function createLegacyHousingBridge({ getState, request, onStop }) {
                 settled = true;
                 pending.delete(finish);
                 if (error !== undefined && error !== null) return reject(new Error(String(error)));
-                // FiveM can marshal a Lua empty array as an empty object.
                 if (rows && !Array.isArray(rows) && typeof rows === 'object' && Object.keys(rows).length === 0) rows = [];
                 if (!Array.isArray(rows) || rows.some((row) => !row || typeof row !== 'object' || Array.isArray(row))) {
                     return reject(new Error('Native housing returned invalid SQL rows'));

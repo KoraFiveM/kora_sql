@@ -85,7 +85,6 @@ test('S5: writes and reads that dodge the old FROM/JOIN/UPDATE/INTO/TABLE anchor
     ]) {
         assert.equal(touchesStockTables(sql), true, sql);
     }
-    // Data and comments still never trigger the guard.
     assert.equal(touchesStockTables("SELECT 'player_houses' AS label"), false);
     assert.equal(touchesStockTables('SELECT 1 -- player_houses\n'), false);
     assert.equal(touchesStockTables('SELECT 1 /* houselocations */'), false);
@@ -109,16 +108,13 @@ test('S5: a resource cannot claim to be kora_housing through the trailing resour
         (name, fn) => { registered[name] = fn; },
         { getInvokingResource: () => invoker, currentResource: 'kora_sql' });
 
-    // A foreign caller passing 'kora_housing' is treated as itself: the guard applies.
     await assert.rejects(registered.query('TRUNCATE player_houses', [], 'kora_housing'), /Unsupported stock housing SQL/);
     assert.equal(f.calls.length, 0);
 
-    // kora_sql's own compat shims forward the real caller, which is honoured.
     invoker = 'kora_sql';
     await registered.query('SELECT * FROM houselocations', [], 'kora_housing');
     assert.equal(f.calls.length, 1, 'the verified owner reads its archive');
 
-    // kora_housing calling directly is itself.
     invoker = 'kora_housing';
     await registered.query('SELECT * FROM houselocations', []);
     assert.equal(f.calls.length, 2);

@@ -1,6 +1,3 @@
-// Connection-string parsing (REVIEW.md S1): TLS options are honoured and
-// unknown options are reported rather than silently dropped.
-
 'use strict';
 
 const test = require('node:test');
@@ -21,7 +18,6 @@ test('S1: ?ssl= accepts oxmysql JSON and booleans', () => {
     assert.deepEqual(parseConnectionString('mysql://u:p@h/qb?ssl=true').ssl, {});
     assert.equal(parseConnectionString('mysql://u:p@h/qb?ssl=false').ssl, undefined);
     assert.equal(parseConnectionString('mysql://u:p@h/qb').ssl, undefined);
-    // Unsupported values warn and fall back instead of stopping boot.
     for (const bad of ['{broken', 'preferred', 'maybe']) {
         const { result, warnings } = captureWarnings(() => parseConnectionString(`mysql://u:p@h/qb?ssl=${bad}`));
         assert.equal(result.ssl, undefined, bad);
@@ -32,7 +28,6 @@ test('S1: ?ssl= accepts oxmysql JSON and booleans', () => {
 test('S1: sslmode spellings map onto mysql2 ssl options', () => {
     assert.deepEqual(parseConnectionString('mysql://u:p@h/qb?sslmode=require').ssl, { rejectUnauthorized: false });
     assert.deepEqual(parseConnectionString('mysql://u:p@h/qb?sslmode=verify-full').ssl, { rejectUnauthorized: true });
-    // mysql-async style semicolon strings often say SslMode=none: keep booting, unencrypted as before.
     const semicolon = parseConnectionString('server=127.0.0.1;database=es;userid=root;password=;SslMode=none');
     assert.equal(semicolon.ssl, undefined);
     assert.equal(semicolon.database, 'es');

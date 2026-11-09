@@ -1,5 +1,3 @@
-// The pinned qb-policejob clears this one stash with raw SQL at startup.
-// Delegate that exact contract so native cached/dirty inventories cannot revive it.
 'use strict';
 
 const DELETE_TRASH = /^\s*DELETE\s+FROM\s+(?:inventories|`inventories`)\s+WHERE\s+(?:identifier|`identifier`)\s*=\s*(?:'([^']*)'|\?|:([A-Za-z_][A-Za-z0-9_]*))\s*;?\s*$/i;
@@ -12,7 +10,6 @@ function isPoliceTrashDelete(sql, params) {
     return Array.isArray(params) && params.length === 1 && params[0] === 'policetrash';
 }
 
-// request must invoke callback(affectedRows, error), never return a Lua promise.
 function createLegacyInventoryBridge({ getState, request, onStop }) {
     const pending = new Set();
     onStop((name) => {
@@ -23,8 +20,6 @@ function createLegacyInventoryBridge({ getState, request, onStop }) {
         if (!isPoliceTrashDelete(sql, params)) return null;
         const state = getState();
         if (state !== 'started' && state !== 'starting') return null;
-        // The provider bounds readiness/lock waits. Once durable SQL is in
-        // flight, wait for its actual outcome rather than timing out a commit.
         return new Promise((resolve, reject) => {
             let settled = false;
             const finish = (affectedRows, error) => {

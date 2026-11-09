@@ -1,5 +1,3 @@
-// Run only against a disposable database: set QBSQL_TEST_DSN to a mysql:// URL
-// whose database name ends in "_test". The test creates and drops its own tables.
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -68,7 +66,6 @@ test('generated columns, checks, modify and extend converge on a real database',
     skip: !disposable,
 }, async () => {
     const pool = mysql.createPool({ uri: dsn, namedPlaceholders: true });
-    // `modify` is owner-only, so this manager tracks owners (as index.js does).
     const owners = 'kora_sql_t_owners';
     const manager = new SchemaManager({ write: pool }, { ownersTable: owners });
     const drop = async () => {

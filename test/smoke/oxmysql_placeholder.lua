@@ -1,6 +1,3 @@
--- Placeholder test: loads stubs/oxmysql/lib/MySQL.lua exactly as a consumer's
--- `@oxmysql/lib/MySQL.lua` include would (LoadResourceFile -> load -> run) against a
--- mocked kora_sql backend, and exercises the call forms ox_inventory uses.
 local h = dofile('test/harness.lua')
 local mocks = dofile('test/mocks.lua')
 mocks.install()
@@ -8,7 +5,6 @@ mocks.install()
 local calls = {}
 local nextResult = { value = nil, err = nil }
 
--- Backend: records every call and answers the trailing-callback style export.
 local backend = setmetatable({}, { __index = function(_, name)
     return function(_self, ...)
         local args = { ... }
@@ -25,7 +21,6 @@ GetNumResourceMetadata = function() return 0 end
 GetResourceMetadata = function() return nil end
 Citizen.CreateThreadNow = function(fn) fn() end
 CreateThreadNow = Citizen.CreateThreadNow
--- Real Await throws the rejection; the shared mock only knows about resolve.
 Citizen.Await = function(p)
     if p.__rejected then error(p.__error, 0) end
     return p.__value

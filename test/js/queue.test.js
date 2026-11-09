@@ -1,8 +1,3 @@
-// Write-queue behaviour, exercised against a FAKE pool that records the SQL and
-// params it is asked to execute -- no database. This pins the coalescing
-// contract: merge by PK, group by signature at flush, last-write-wins per
-// column, and mid-flush enqueues landing in the next generation.
-
 'use strict';
 
 const test = require('node:test');
@@ -50,7 +45,6 @@ function deferred() {
 
 const nextTurn = () => new Promise((resolve) => setImmediate(resolve));
 
-// H2: invalid enqueue input is dropped and logged, never thrown.
 function assertDropped(q, fn, re, msg) {
     const log = require('../../server/js/logger.js');
     const errors = [];
@@ -166,7 +160,6 @@ test('flush checks completed generations when another writer starts before its w
             inFlight = value;
             if (value === null && !injected) {
                 injected = true;
-                // A caller may start B after cleanup, before A's waiters resume.
                 queueMicrotask(() => { reentered = q.flush('players'); });
             }
         },
@@ -240,11 +233,9 @@ test('same PK enqueued twice merges to one row with per-column last-write-wins',
     q.enqueue('players', 'citizenid', { pk: 'ABC', cols: { money: 'm2', job: 'j1' } }, {});
     await q.flush();
 
-    // One statement (one signature: money,job), one row.
     assert.equal(executed.length, 1);
-    // Columns are sorted in the signature: job, money.
     assert.match(executed[0].sql, /`citizenid`,`job`,`money`/);
-    assert.deepEqual(executed[0].params, ['ABC', 'j1', 'm2']);   // m2 wins over m1
+    assert.deepEqual(executed[0].params, ['ABC', 'j1', 'm2']);
 });
 
 test('differing column sets produce distinct signatures = distinct statements', async () => {
@@ -271,7 +262,7 @@ test('accumulate mode sums overlapping columns before flush', async () => {
     await q.flush();
 
     assert.equal(executed.length, 1);
-    assert.deepEqual(executed[0].params, ['ABC', 15]);   // summed in-memory
+    assert.deepEqual(executed[0].params, ['ABC', 15]);
     assert.match(executed[0].sql, /`dist` = `dist` \+ VALUES\(`dist`\)/);
 });
 
@@ -282,7 +273,7 @@ test('coalesce ratio reflects rows-in vs rows-written', async () => {
 
     q.enqueueMany('players', 'citizenid', [
         { pk: 'ABC', cols: { money: 'a' } },
-        { pk: 'ABC', cols: { money: 'b' } },   // same PK -> coalesced
+        { pk: 'ABC', cols: { money: 'b' } },
         { pk: 'DEF', cols: { money: 'c' } },
     ], {});
     await q.flush();
@@ -300,7 +291,6 @@ test('a transient write failure requeues and eventually succeeds', async () => {
     q.enqueue('players', 'citizenid', { pk: 'ABC', cols: { money: 'm' } }, {});
     await q.flush();
 
-    // First attempt failed, retry succeeded -> exactly one successful write.
     assert.equal(executed.length, 1);
     assert.deepEqual(executed[0].params, ['ABC', 'm']);
 });
@@ -403,14 +393,9 @@ test('batched UPDATE chunks stay inside the placeholder budget for wide rows', a
     const rows = Array.from({ length: 30 }, (_, i) => ({ pk: `p${i}`, cols }));
     q.enqueueMany('players', 'citizenid', rows, { mode: 'assign', writeMode: 'update' });
     await q.flush();
-    // 4 columns x (1 key + 1 value) + 1 WHERE key = 9 placeholders a row -> 11 rows a statement.
     assert.ok(executed.length >= 3);
     for (const e of executed) assert.ok(e.params.length <= 100, `${e.params.length} placeholders`);
 });
-
-// ---------------------------------------------------------------------------
-// Review fixes (REVIEW.md S2, S3, S4, P3, P5, P6, P7, P10).
-// ---------------------------------------------------------------------------
 
 function deterministic(code) {
     const err = new Error(`simulated ${code}`);
@@ -483,7 +468,6 @@ test('S4: accumulate mode drops non-numeric values and queues nothing for them',
     }
     assert.equal(q.pendingRowCount, 0);
     assert.equal(q.pending.size, 0);
-    // strict (the awaited upsert export) stays all-or-nothing and throws.
     assert.throws(() => q.enqueueMany('accounts', 'id', [
         { pk: 'A', cols: { balance: 1 } },
         { pk: 'B', cols: { balance: 'oops' } },
@@ -571,7 +555,6 @@ test('P6: transient errors keep the retry path; error classification', () => {
 test('P6: a multi-row dead-letter is one INSERT', async () => {
     const { executed, pools } = makeFakePools();
     const q = new WriteQueue(null, pools, new Stats(150, 50), CFG);
-    // Bisection ends at single rows; exercise the multi-row form directly.
     await q._deadLetter('missing', [{ pk: 'A', cols: { v: 1 } }, { pk: ['x', 'y'], cols: { v: 2 } }], deterministic('ER_NO_SUCH_TABLE'));
     assert.equal(executed.length, 1);
     assert.match(executed[0].sql, /VALUES \(\?,\?,\?,\?,NOW\(\)\),\(\?,\?,\?,\?,NOW\(\)\)$/);
@@ -605,7 +588,6 @@ test('P7: a conflict key without a matching PRIMARY/UNIQUE index is reported onc
         log.warn = warn;
     }
     assert.equal(hasUniqueIndexOn([{ INDEX_NAME: 'uk', COLUMN_NAME: 'B' }, { INDEX_NAME: 'uk', COLUMN_NAME: 'a' }], ['a', 'b']), true);
-    // L5: UNIQUE(a) still makes ON DUPLICATE KEY fire for a key (a, b).
     assert.equal(hasUniqueIndexOn([{ INDEX_NAME: 'uk', COLUMN_NAME: 'a' }], ['a', 'b']), true, 'a unique subset still catches duplicates');
     assert.equal(hasUniqueIndexOn([{ INDEX_NAME: 'uk', COLUMN_NAME: 'a' }, { INDEX_NAME: 'uk', COLUMN_NAME: 'c' }], ['a', 'b']), false, 'a wider unique index does not');
 });
@@ -630,10 +612,6 @@ test('P10: enqueueMany with immediate priority flushes once, not once per row', 
     assert.equal(executed.length, 1, 'one statement for the whole batch');
 });
 
-// ---------------------------------------------------------------------------
-// REVIEW2.md round-2 fixes (H2, M1, M2).
-// ---------------------------------------------------------------------------
-
 test('H2: one invalid row in enqueueMany drops only that row; the rest are queued and written', async () => {
     const { executed, pools } = makeFakePools();
     const log = require('../../server/js/logger.js');
@@ -646,14 +624,13 @@ test('H2: one invalid row in enqueueMany drops only that row; the rest are queue
         assert.doesNotThrow(() => {
             result = q.enqueueMany('players', 'citizenid', [
                 { pk: 'A', cols: { money: 1 } },
-                { pk: null, cols: { money: 2 } },          // citizenid not loaded yet
+                { pk: null, cols: { money: 2 } },
                 { pk: 'C', cols: { 'bad-name': 3 } },
                 { pk: 'D', cols: { money: 4 } },
-                { pk: undefined, cols: { money: 5 } },     // same reason again
+                { pk: undefined, cols: { money: 5 } },
             ], {}, 'kora_core');
         });
         assert.deepEqual(result, { queued: 2, dropped: 3 });
-        // The next save tick hits the same bad player: no new log line.
         q.enqueueMany('players', 'citizenid', [{ pk: null, cols: { money: 9 } }], {}, 'kora_core');
         assert.equal(errors.length, 2, `one log per (resource, reason): ${errors.join(' | ')}`);
         assert.ok(errors.every((m) => /kora_core/.test(m)), 'the log names the calling resource');

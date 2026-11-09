@@ -1,4 +1,3 @@
-// Run only against an explicitly supplied disposable Unix-socket database.
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -55,7 +54,6 @@ test('checked finance SQL commits receipts and rejects zero-row domain changes o
             const key = commit ? 'old-driver-commit' : 'old-driver-rollback';
             await oldConnection.beginTransaction();
             await oldConnection.query('INSERT INTO bank_operations (resource,operation_key,request,receipt) VALUES (?,?,?,?)', ['kora_housing',key,'terms','{"status":"completed"}']);
-            // A fresh runner has no old worker map, as after a SQL-host restart.
             let finished = false;
             const lookup = restarted.transactionChecked([{ query: receiptRead, values: ['kora_housing', key] }]).then(result => { finished = true; return result; });
             await new Promise(resolve => setTimeout(resolve, 25));

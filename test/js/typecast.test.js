@@ -1,5 +1,3 @@
-// oxmysql typeCast port + its wiring: applied on the ox executor view only.
-
 'use strict';
 
 const test = require('node:test');

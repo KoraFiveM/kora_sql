@@ -1,7 +1,3 @@
-// Declarative schema setup, exercised against a FAKE pool (no database).
-//
-// Run with:  node --test  (from the resource root)
-
 'use strict';
 
 const test = require('node:test');
@@ -222,7 +218,6 @@ test('S7: modify only applies widening changes', () => {
         ['varchar(50)', 'varchar(255)'], ['char(10)', 'varchar(10)'], ['int', 'bigint'], ['int unsigned', 'bigint unsigned'],
         ['tinyint(1)', 'int'], ['decimal(10,2)', 'decimal(12,4)'], ['text', 'longtext'], ['blob', 'mediumblob'],
         ["enum('a','b')", "enum('a','b','c')"], ["enum('a','b''c')", "enum('a','b\\'c','d')"], ['float', 'double'], ['datetime', 'datetime(3)'],
-        // M6: transitions that cannot lose data and that worked before ownership/widening rules.
         ['varchar(50)', 'text'], ['varchar(255)', 'longtext'], ['varchar(50)', 'tinytext'], ['varbinary(100)', 'blob'],
         ['int unsigned', 'bigint'], ['int', 'decimal(12,2)'], ['int unsigned', 'decimal(10,0)'],
     ]) assert.equal(isWidening(got, want), true, `${got} -> ${want}`);
@@ -240,7 +235,6 @@ test('S7: narrowing, extend tables and the convar refuse modify; NOT NULL tighte
     const shrink = diff(spec({ type: 'varchar(16)', null: true }), actual);
     assert.deepEqual(shrink.statements, []);
     assert.match(shrink.warnings[0], /modify refused \(only widening type changes are applied\)/);
-    // NULL -> NOT NULL is applied only after the manager finds no NULLs.
     const tighten = diff(spec({ type: 'varchar(255)' }), actual);
     assert.deepEqual(tighten.modifies.map((m) => [m.column, m.nullCheck]), [['name', true]]);
     const extend = diff(spec({ type: 'varchar(500)', null: true }, { extend: true }), actual);
@@ -303,7 +297,6 @@ test('S7/M5: only the owner may modify an owned table; an unowned table keeps th
         const second = await new SchemaManager(legacy.pools, opts).ensureTable(spec, 'second_res');
         assert.deepEqual(second.modified_columns, ['name']);
 
-        // Without an owners table every table is unowned: the pre-ownership behaviour.
         const anonymous = ownedPools({ owner: 'owner_res' });
         assert.deepEqual((await new SchemaManager(anonymous.pools).ensureTable(spec, 'x')).modified_columns, ['name']);
     } finally {
@@ -407,7 +400,6 @@ test('a CREATE without an explicit collate uses the configured default; existing
     assert.match(create.text, /DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci$/);
     assert.ok(!/`cid` varchar\(50\) COLLATE/.test(create.text), 'columns inherit the table default');
 
-    // An explicit collate wins; a default for another charset is ignored.
     assert.match(buildCreate(validateSpec(spec(), { createCollate: 'utf8mb4_general_ci' })), /COLLATE=utf8mb4_unicode_ci$/);
     assert.ok(!/COLLATE=/.test(buildCreate(validateSpec({ name: 'l', charset: 'latin1', columns: [{ name: 'id', type: 'int' }] }, { createCollate: 'utf8mb4_unicode_ci' }))));
 

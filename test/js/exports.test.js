@@ -1,9 +1,3 @@
-// Export readiness contract.
-//
-// FiveM registers JS exports before kora_sql's asynchronous pool boot completes.
-// Legacy compatibility consumers can query immediately while loading, so the
-// export boundary itself must retain those calls until the driver is ready.
-
 'use strict';
 
 const test = require('node:test');
@@ -115,12 +109,12 @@ test('S5: the trailing resource is trusted only from kora_sql itself; others are
     };
     register(api, (name, fn) => { registered[name] = fn; }, { getInvokingResource: () => invoker, currentResource: 'kora_sql' });
 
-    await registered.query('SELECT 1', [], 'real_consumer');           // forwarded by a compat shim
+    await registered.query('SELECT 1', [], 'real_consumer');
     invoker = 'spoofer';
-    await registered.query('SELECT 1', [], 'kora_housing');            // claim ignored
-    await registered.query('SELECT 1', []);                            // no claim at all
+    await registered.query('SELECT 1', [], 'kora_housing');
+    await registered.query('SELECT 1', []);
     invoker = null;
-    await registered.query('SELECT 1', [], 'internal');                // same-runtime call
+    await registered.query('SELECT 1', [], 'internal');
     assert.deepEqual(seen, ['real_consumer', 'spoofer', 'spoofer', 'internal']);
 });
 
@@ -161,12 +155,10 @@ test('H2: enqueue/enqueueMany never throw into the caller, before or after ready
             enqueue: () => { throw new Error('boom-enqueue'); },
             enqueueMany: () => { throw new Error('boom-many'); },
         };
-        // Before ready: retained, then the failure is logged.
         assert.doesNotThrow(() => registered.enqueueMany('players', 'citizenid', [{ pk: null }], {}));
         gate.resolve(true);
         await gate.promise;
         await new Promise((resolve) => setImmediate(resolve));
-        // After ready: the same input behaves the same way.
         api.isReady = () => true;
         assert.doesNotThrow(() => registered.enqueueMany('players', 'citizenid', [{ pk: null }], {}));
         assert.doesNotThrow(() => registered.enqueue('players', 'citizenid', { pk: null }, {}));

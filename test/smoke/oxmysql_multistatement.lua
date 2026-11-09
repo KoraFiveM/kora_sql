@@ -1,5 +1,3 @@
--- qbsql_allow_multiple_statements: the Lua oxmysql bridge honours the convar with
--- the same truthy parsing as server/js/config.js getBoolConvar ('true','1','yes').
 package.path = package.path .. ';./?.lua'
 local h = dofile('test/harness.lua')
 local mocks = dofile('test/mocks.lua')

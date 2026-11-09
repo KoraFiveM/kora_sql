@@ -1,30 +1,7 @@
-// Public export surface, registered in one table-driven loop.
-//
-// Unlike kora_lib there is no `Kora`-style namespace table to walk with a finalise
-// step -- the surface is JS-side, so it is enumerated explicitly here. Every
-// data export takes a trailing `invokingResource` argument so the oxmysql/
-// mysql-async compat shims can forward the REAL caller (captured via
-// GetInvokingResource() at call time in the Lua shim) through to stats.js.
-// Without that, every slow query would be attributed to "qbsql".
-//
-// CRITICAL FiveM DETAIL: FiveM's citizen `exports(name, fn)` registrar is the
-// bare `exports` global ONLY in the resource ENTRY file. Inside a require()'d
-// CommonJS sub-module (this file), bare `exports` is module.exports and is NOT
-// callable -- which is exactly why oxmysql bundles to a single file. Rather than
-// bundle, index.js captures the citizen registrar in the entry scope and passes
-// it in here as `registerExport`. We never touch bare `exports` in this module.
-//
-// Callbacks arriving from Lua are invoked as fn(...args, cb); the Lua side
-// passes its callback last. The promise-returning path (no cb) is a bonus for
-// same-host callers; the Lua wrappers always use the cb path.
-
 'use strict';
 
 const log = require('./logger');
 
-// A Lua resource can stop after it invokes an async export but before kora_sql
-// settles it. FiveM then throws when the stale function reference is called.
-// Never let that transport-level race become an unhandled Node rejection.
 function reply(name, cb, ...args) {
     if (!cb) return;
     try {
@@ -34,22 +11,7 @@ function reply(name, cb, ...args) {
     }
 }
 
-// Wrap an async impl so it can be called two ways from Lua:
-//   * exports.kora_sql:queryAsync(sql, params, cb, resource) -> cb(result, errString)
-//   * exports.kora_sql:query(sql, params, resource)          -> returns a JS promise
-//     (FiveM marshals a resolved promise back to a Citizen.Await on the Lua side)
-// The last argument is treated as `invokingResource` when it is a string, and as
-// a callback when it is callable.
-//
-// CALLER IDENTITY. The trailing resource string is only a claim. It is honoured
-// when kora_sql itself made the call (its Lua compat shims capture the real
-// caller with GetInvokingResource() and forward it); for any other caller the
-// identity is GetInvokingResource() here, so a resource cannot pass
-// 'kora_housing' to skip the housing guard or misattribute its slow queries.
-// `opts` lets tests inject the two natives.
 function register(api, exports, opts = {}) {
-    // `exports` here is the citizen registrar injected by index.js (the entry
-    // file), NOT this module's module.exports -- see the header note.
     if (typeof exports !== 'function') throw new Error('qbsql/exports: registrar not supplied');
 
     const getInvoker = opts.getInvokingResource
@@ -57,12 +19,10 @@ function register(api, exports, opts = {}) {
     const self = opts.currentResource
         || (typeof globalThis.GetCurrentResourceName === 'function' ? globalThis.GetCurrentResourceName() : null);
     const warnedClaims = new Set();
-    // Must run synchronously inside the export call: GetInvokingResource() is
-    // only meaningful while the cross-resource call is on the stack.
     function verifiedCaller(claimed) {
         if (!getInvoker) return claimed;
         let invoker = null;
-        try { invoker = getInvoker(); } catch (_) { /* outside an export call */ }
+        try { invoker = getInvoker(); } catch (_) {  }
         if (!invoker || invoker === self) return claimed;
         if (typeof claimed === 'string' && claimed !== invoker && !warnedClaims.has(invoker)) {
             warnedClaims.add(invoker);
@@ -71,23 +31,15 @@ function register(api, exports, opts = {}) {
         return invoker;
     }
 
-    // Data calls received before boot completes wait on the ready promise. Cap
-    // the retained fire-and-forget enqueues so a database that never comes up
-    // cannot grow memory without bound.
     const PRE_READY_ENQUEUE_LIMIT = 100000;
     let preReadyEnqueues = 0;
     let preReadyDropped = 0;
-    // A data call: (sql, params, [cb], [resource]) in any trailing combination.
     function dataExport(name, impl) {
         const exported = function (...args) {
-            // Peel trailing cb / resource off the argument list.
             let cb = null, resource = null;
             while (args.length) {
                 const last = args[args.length - 1];
                 if (typeof last === 'function' && !cb) { cb = args.pop(); continue; }
-                // A Lua caller with no callback leaves a nil between params and
-                // the invoking resource ([sql, params, nil, 'res']); drop the
-                // hole so `resource` is still the argument impl receives last.
                 if ((last === null || last === undefined) && args.length > implArity(impl)) {
                     args.pop(); continue;
                 }
@@ -97,36 +49,19 @@ function register(api, exports, opts = {}) {
                 break;
             }
             resource = verifiedCaller(resource);
-            // Export registration happens before the asynchronous pool boot
-            // completes. Compatibility consumers commonly issue their first
-            // query while their own server script is loading, so every data
-            // call must queue behind readiness rather than dereference an
-            // executor/transaction/queue that does not exist yet.
             const p = Promise.resolve()
                 .then(() => api.ready())
                 .then(() => impl(...args, resource))
                 .then((res) => { reply(name, cb, res, null); return res; })
                 .catch((err) => {
-                    // Match oxmysql's useful failure diagnostics: identify the
-                    // consumer and SQL without dumping bind values (which may
-                    // contain passwords, identifiers, or character data).
                     const sql = typeof args[0] === 'string'
                         ? args[0].replace(/\s+/g, ' ').trim().slice(0, 500)
                         : '<non-SQL call>';
                     log.error('exports', `${name} failed for ${resource || 'unknown'}: ${err.message}; SQL: ${sql}`);
                     if (cb) { reply(name, cb, null, String(err.message)); return null; }
-                    // No callback: rethrow so a Citizen.Await on the Lua side rejects.
                     throw err;
                 });
             if (!cb) {
-                // Fire-and-forget is a legitimate calling pattern here: some
-                // Lua callers never attach/await the returned promise. If `p`
-                // rejects and nothing ever consumes it, Node reports an
-                // unhandled rejection. Attach a no-op catch to `p` itself (not
-                // to a derived promise) purely so it counts as "handled";
-                // this does not change what `p` resolves/rejects with, so a
-                // caller that DOES await/consume it still sees the real
-                // result or error.
                 p.catch(() => {});
                 return p;
             }
@@ -135,11 +70,6 @@ function register(api, exports, opts = {}) {
         return exported;
     }
 
-    // oxmysql's `_async` exports are registered by its JS host and return a
-    // genuine JS promise. A Lua identity shim cannot safely recreate that
-    // cross-runtime promise, so publish only those aliases directly under the
-    // provided resource identity. The normal/callback exports remain in the
-    // Lua bridge where compatibility convars and the multi-statement guard live.
     function provideForeign(resource, name, fn) {
         if (typeof globalThis.on !== 'function') return;
         globalThis.on(`__cfx_export_${resource}_${name}`, (setCb) => setCb(fn));
@@ -149,22 +79,16 @@ function register(api, exports, opts = {}) {
         provideForeign('oxmysql', `${name}_async`, (...args) => exported(...args));
     }
 
-    // Best-effort arity of the impl minus its trailing `resource` param, so the
-    // resource-peeling above doesn't eat a legitimate string SQL argument.
     function implArity(impl) {
         return Math.max(0, impl.length - 1);
     }
 
-    // Preserve enqueue's synchronous, fire-and-forget hot path once booted,
-    // while retaining writes submitted during the short startup window.
     function enqueueWhenReady(name, impl) {
         if (api.isReady()) {
             impl();
             return;
         }
         if (preReadyEnqueues >= PRE_READY_ENQUEUE_LIMIT) {
-            // Never throw into a fire-and-forget caller: drop and log (once
-            // per overflow episode) instead.
             preReadyDropped++;
             if (preReadyDropped === 1) {
                 log.error('exports', `qbsql: ${name} dropped: ${PRE_READY_ENQUEUE_LIMIT} writes are already waiting for the database to become ready`);
@@ -205,11 +129,6 @@ function register(api, exports, opts = {}) {
     const update = dataExport('update', (sql, params, resource) => api.executor.update(sql, params, resource));
     const prepare = dataExport('prepare', (sql, params, resource) => api.executor.prepare(sql, params, resource));
 
-    // oxmysql-flavoured variants (oxQuery, ...). Identical to the native
-    // exports except results go through oxmysql's typeCast when the
-    // `kora_sql_ox_typecast` convar (default true) is on. Used by the oxmysql
-    // Lua bridge, the oxmysql `_async` exports and lib/MySQL.lua; the native
-    // exports above never apply it.
     const oxExec = () => (api.cfg && api.cfg.oxTypeCast === false
         ? api.executor
         : api.executor.withOxTypeCast());
@@ -237,15 +156,12 @@ function register(api, exports, opts = {}) {
     dataExport('batch', (queries, params, resource) => api.txn.batch(queries, params));
     oxAsync('transaction', transaction);
 
-    // --- prepared handle store (in-memory, does NOT survive a restart) ---
     const store = (sql, cb) => {
         const handle = api.store.put(sql);
         reply('store', cb, handle);
         return handle;
     };
     exports('store', store);
-    // oxmysql's compatibility store returns the SQL text unchanged. Keep
-    // kora_sql's numeric handle store private to the kora_sql identity.
     provideForeign('oxmysql', 'store_async', (sql) => Promise.resolve(sql));
     const rawExecute = dataExport('rawExecute', (handle, params, resource) => {
         const sql = typeof handle === 'number' ? api.store.get(handle) : handle;
@@ -276,9 +192,6 @@ function register(api, exports, opts = {}) {
     exports('startTransaction', startTransaction);
     provideForeign('oxmysql', 'startTransaction_async', startTransaction);
 
-    // Fire-and-forget: never throws into the caller, before or after ready.
-    // Invalid rows are dropped and logged by the queue (once per resource and
-    // reason); valid rows in the same call are still queued.
     function safeEnqueue(name, impl) {
         try {
             enqueueWhenReady(name, () => {
@@ -297,10 +210,6 @@ function register(api, exports, opts = {}) {
         safeEnqueue('enqueueMany', () => api.queue.enqueueMany(table, key, rows, opts, resource));
     });
     dataExport('upsert', (table, key, rows, opts, resource) => {
-        // Immediate awaited batched upsert -- same builder as the queue, but
-        // flushed now and its result returned.
-        // strict: an awaited call reports invalid input as an error (as it
-        // always has) instead of silently dropping rows.
         api.queue.enqueueMany(table, key, rows, Object.assign({}, opts, { priority: 'normal', strict: true }), resource);
         return api.queue.flush(table).then(() => rows.length);
     });
@@ -317,7 +226,6 @@ function register(api, exports, opts = {}) {
     dataExport('awaitTables', (names, timeoutMs, resource) => api.schema.awaitTables(names, timeoutMs, resource));
     dataExport('prepareWarm', (sqlList) => api.prepareWarm(sqlList));
 
-    // The stats objects exist only once boot() has loaded its config.
     exports('stats', (cb) => { const s = api.stats && api.statements ? api.stats.summary(api.statements.summary()) : null; if (cb) cb(s); return s; });
     exports('slowQueries', (limit, cb) => { const s = api.stats ? api.stats.slowQueries(limit) : []; if (cb) cb(s); return s; });
     exports('resetStats', () => { if (api.stats) api.stats.reset(); });
