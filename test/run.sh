@@ -20,7 +20,7 @@ echo "== js (node --test) =="
 if ! ( cd "$dir" && node --test js/batch.test.js js/queue.test.js js/params.test.js js/execute.test.js js/legacy-inventory.test.js js/legacy-housing.test.js js/exports.test.js js/transaction.test.js js/startup.test.js js/typecast.test.js js/schema.test.js js/stats.test.js js/config.test.js js/pool.test.js ); then status=1; fi
 
 # Integration tests need a live DB; only run when a DSN is provided.
-if [ -n "${QBSQL_TEST_DSN:-}" ]; then
+if [ -n "${KORA_SQL_TEST_DSN:-}" ]; then
     echo "== integration =="
     if ! ( cd "$dir" && node --test integration/*.test.js ); then status=1; fi
 fi

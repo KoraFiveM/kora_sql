@@ -3,8 +3,6 @@ game 'gta5'
 lua54 'yes'
 
 name 'kora_sql'
--- Keep the legacy resource name resolvable for exports['qbsql'] callers.
-provide 'qbsql'
 author 'Jamie'
 version '1.0.0'
 description 'High-throughput MySQL driver for FiveM with write coalescing and oxmysql/mysql-async compatibility'
@@ -38,8 +36,8 @@ provide 'ghmattimysql'
 -- alphabetical glob expansion.
 --   0. @kora_lib/init.lua + config.lua  first: compat/* read Config.compat at load
 --   1. dist/build.js        bundled driver + mysql2 + export surface
---   2. server/ready.lua     qbsql:ready fan-out + isReady polling helper
---   3. server/commands.lua  /qbsql console commands (consult ready.lua)
+--   2. server/ready.lua     kora_sql:ready fan-out + isReady polling helper
+--   3. server/commands.lua  /kora_sql console commands (consult ready.lua)
 --   4. server/compat/*      pure translation layers, no internal dependents
 server_scripts {
     '@kora_lib/init.lua',

@@ -7,7 +7,7 @@ function isIdent(value) {
 }
 
 function assertIdent(value, what, prefix) {
-    if (!isIdent(value)) throw new Error(`${prefix || 'qbsql'}: invalid ${what} '${value}'`);
+    if (!isIdent(value)) throw new Error(`${prefix || 'kora_sql'}: invalid ${what} '${value}'`);
 }
 
 module.exports = { IDENT, isIdent, assertIdent };

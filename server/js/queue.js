@@ -26,7 +26,7 @@ function pkComponent(value) {
     } else if (typeof value === 'boolean') {
         return value ? '1' : '0';
     }
-    throw invalid('bad-pk', `qbsql/queue: primary key values must be strings or finite numbers (got ${value === null || value === undefined ? 'nil' : typeof value === 'number' ? String(value) : typeof value})`);
+    throw invalid('bad-pk', `kora_sql/queue: primary key values must be strings or finite numbers (got ${value === null || value === undefined ? 'nil' : typeof value === 'number' ? String(value) : typeof value})`);
 }
 
 function pkKey(pk) {
@@ -61,7 +61,7 @@ function accumulateValue(table, column, value) {
         const n = Number(value);
         if (Number.isFinite(n)) return n;
     }
-    throw invalid('accumulate-value', `qbsql/queue: accumulate mode needs a finite number for ${table}.${column} (got ${typeof value === 'string' ? `'${value.slice(0, 32)}'` : String(value)})`);
+    throw invalid('accumulate-value', `kora_sql/queue: accumulate mode needs a finite number for ${table}.${column} (got ${typeof value === 'string' ? `'${value.slice(0, 32)}'` : String(value)})`);
 }
 
 const STATEMENT_LEVEL_WRITE_ERRORS = new Set([
@@ -161,7 +161,7 @@ class WriteQueue {
             this.pending.set(table, st);
         } else if (st.mode !== mode || st.writeMode !== writeMode || JSON.stringify(st.conflictKey) !== JSON.stringify(conflictKey)) {
             if (st.rows.size > 0 || st.inFlight) {
-                throw invalid('incompatible-options', `qbsql/queue: incompatible queue options for table ${table} while writes are pending.`);
+                throw invalid('incompatible-options', `kora_sql/queue: incompatible queue options for table ${table} while writes are pending.`);
             }
             st.conflictKey = conflictKey;
             st.mode = mode;
@@ -197,20 +197,20 @@ class WriteQueue {
     }
 
     _checkTarget(table, conflictKey, opts) {
-        if (!isIdent(table)) throw invalid('bad-table', `qbsql/queue: invalid table name '${table}'`);
+        if (!isIdent(table)) throw invalid('bad-table', `kora_sql/queue: invalid table name '${table}'`);
         const keyCols = Array.isArray(conflictKey) ? conflictKey : [conflictKey];
         if (keyCols.length === 0 || !keyCols.every(isIdent)) {
-            throw invalid('bad-key', `qbsql/queue: invalid conflict key for ${table}`);
+            throw invalid('bad-key', `kora_sql/queue: invalid conflict key for ${table}`);
         }
         const mode = opts.mode || 'assign';
-        if (mode !== 'assign' && mode !== 'accumulate') throw invalid('bad-mode', `qbsql/queue: unsupported mode '${mode}'.`);
+        if (mode !== 'assign' && mode !== 'accumulate') throw invalid('bad-mode', `kora_sql/queue: unsupported mode '${mode}'.`);
         const writeMode = opts.writeMode || 'upsert';
         if (writeMode !== 'upsert' && writeMode !== 'update') {
-            throw invalid('bad-write-mode', `qbsql/queue: unsupported writeMode '${writeMode}'.`);
+            throw invalid('bad-write-mode', `kora_sql/queue: unsupported writeMode '${writeMode}'.`);
         }
         let allowed = null;
         if (opts.allowedColumns !== undefined && opts.allowedColumns !== null) {
-            if (!Array.isArray(opts.allowedColumns)) throw invalid('bad-allowed-columns', 'qbsql/queue: allowedColumns must be a list of column names');
+            if (!Array.isArray(opts.allowedColumns)) throw invalid('bad-allowed-columns', 'kora_sql/queue: allowedColumns must be a list of column names');
             allowed = new Set(opts.allowedColumns.map((c) => String(c).toLowerCase()));
         }
         return { keyCols, mode, writeMode, allowed };
@@ -218,22 +218,22 @@ class WriteQueue {
 
     _prepareRow(table, target, row) {
         if (!row || typeof row !== 'object' || !row.cols || typeof row.cols !== 'object' || Array.isArray(row.cols)) {
-            throw invalid('bad-row', `qbsql/queue: rows for ${table} must be { pk = ..., cols = { ... } }`);
+            throw invalid('bad-row', `kora_sql/queue: rows for ${table} must be { pk = ..., cols = { ... } }`);
         }
         const { keyCols, mode, allowed } = target;
         if (Array.isArray(row.pk) ? row.pk.length !== keyCols.length : keyCols.length !== 1) {
-            throw invalid('pk-arity', `qbsql/queue: ${table} needs ${keyCols.length} primary key value(s) per row`);
+            throw invalid('pk-arity', `kora_sql/queue: ${table} needs ${keyCols.length} primary key value(s) per row`);
         }
         const key = pkKey(row.pk);
         const keySet = new Set(keyCols.map((c) => c.toLowerCase()));
         const cols = {};
         const names = Object.keys(row.cols);
-        if (names.length === 0) throw invalid('no-columns', `qbsql/queue: a row for ${table} has no columns to write`);
+        if (names.length === 0) throw invalid('no-columns', `kora_sql/queue: a row for ${table} has no columns to write`);
         for (const name of names) {
-            if (!isIdent(name)) throw invalid('bad-column', `qbsql/queue: invalid column name '${name}' for ${table}`);
+            if (!isIdent(name)) throw invalid('bad-column', `kora_sql/queue: invalid column name '${name}' for ${table}`);
             const lower = name.toLowerCase();
-            if (keySet.has(lower)) throw invalid('key-column', `qbsql/queue: ${table}.${name} is a conflict key column and cannot be written`);
-            if (allowed && !allowed.has(lower)) throw invalid('not-allowed', `qbsql/queue: column ${table}.${name} is not in allowedColumns`);
+            if (keySet.has(lower)) throw invalid('key-column', `kora_sql/queue: ${table}.${name} is a conflict key column and cannot be written`);
+            if (allowed && !allowed.has(lower)) throw invalid('not-allowed', `kora_sql/queue: column ${table}.${name} is not in allowedColumns`);
             cols[name] = mode === 'accumulate' ? accumulateValue(table, name, row.cols[name]) : row.cols[name];
         }
         return { key, pk: row.pk, cols };
@@ -312,7 +312,7 @@ class WriteQueue {
         this.stats.countCrossing();
         if (rows && !Array.isArray(rows) && typeof rows === 'object' && Object.keys(rows).length === 0) rows = [];
         if (!Array.isArray(rows)) {
-            const err = invalid('not-a-list', `qbsql/queue: enqueueMany for ${table} needs a list of rows`);
+            const err = invalid('not-a-list', `kora_sql/queue: enqueueMany for ${table} needs a list of rows`);
             if (strict) throw err;
             this._reject(resource, table, err, 1);
             return { queued: 0, dropped: 1 };
@@ -534,8 +534,8 @@ class WriteQueue {
 
     _deadLetterError(table, what, chunk, failed) {
         return new Error(failed
-            ? `qbsql: write to ${table} failed ${what}; failed to dead-letter ${failed}/${chunk.length} row(s)`
-            : `qbsql: write to ${table} failed ${what}; ${chunk.length} row(s) were dead-lettered`);
+            ? `kora_sql: write to ${table} failed ${what}; failed to dead-letter ${failed}/${chunk.length} row(s)`
+            : `kora_sql: write to ${table} failed ${what}; ${chunk.length} row(s) were dead-lettered`);
     }
 
     async _writeWithRetry(table, sql, params, chunk, mode, attempt, reMerged) {
@@ -551,7 +551,7 @@ class WriteQueue {
                 const statementLevel = STATEMENT_LEVEL_WRITE_ERRORS.has(err.code);
                 if (chunk.length > 1 && !statementLevel) {
                     this._clearReMerged(table, reMerged, mode);
-                    const split = new Error(`qbsql: write to ${table} failed (${err.code}); bisecting ${chunk.length} rows`);
+                    const split = new Error(`kora_sql: write to ${table} failed (${err.code}); bisecting ${chunk.length} rows`);
                     split.bisect = true;
                     split.cause = err;
                     throw split;

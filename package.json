@@ -1,5 +1,5 @@
 {
-  "name": "qbsql",
+  "name": "kora_sql",
   "version": "1.0.0",
   "description": "High-throughput MySQL driver for FiveM with write coalescing and oxmysql/mysql-async compatibility",
   "private": true,

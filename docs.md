@@ -1,6 +1,6 @@
 # kora_sql API reference
 
-Two ways to use qbsql: the modern `Kora.sql.*` API (recommended for new code), and
+Two ways to use kora_sql: the modern `Kora.sql.*` API (recommended for new code), and
 the drop-in `oxmysql` / `mysql-async` / `ghmattimysql` compat surfaces (existing
 code works unmodified).
 
@@ -10,7 +10,7 @@ code works unmodified).
    bundled. No runtime `node_modules` or FiveM yarn builder is required.
 2. In `server.cfg`, before any resource that queries:
    ```
-   set mysql_connection_string "mysql://user:pass@localhost/qbcore?charset=utf8mb4"
+   set mysql_connection_string "mysql://user:pass@localhost/kora_core?charset=utf8mb4"
    ensure kora_sql
    ```
    Use `set`, never `setr` or `sets`, for the connection string: `setr`
@@ -18,30 +18,30 @@ code works unmodified).
    list, which would leak the database password.
 3. Optional convars (defaults shown):
    ```
-   set qbsql_read_pool_size 16
-   set qbsql_write_pool_size 8
+   set kora_sql_read_pool_size 16
+   set kora_sql_write_pool_size 8
    set kora_sql_flush_pool_size 4        # separate pool for the write queue's flush; 0 = flush on the write pool
-   set kora_sql_statement_cache 256      # cache * (read+write pools) must be <= 8000 (old name qbsql_statement_cache still read)
+   set kora_sql_statement_cache 256      # cache * (read+write pools) must be <= 8000 (old name kora_sql_statement_cache still read)
    set kora_sql_default_collate utf8mb4_unicode_ci # collation for tables ensureTable creates without one; "" = server default
-   set qbsql_connect_retry_interval 2000 # ms between startup connection retries
-   set qbsql_flush_interval 250       # ms between coalescing flushes
-   set qbsql_max_pending_rows 500     # high-water mark that forces a flush
-   set qbsql_slow_threshold 150       # ms; queries slower than this hit the slow log
+   set kora_sql_connect_retry_interval 2000 # ms between startup connection retries
+   set kora_sql_flush_interval 250       # ms between coalescing flushes
+   set kora_sql_max_pending_rows 500     # high-water mark that forces a flush
+   set kora_sql_slow_threshold 150       # ms; queries slower than this hit the slow log
    set kora_sql_query_timeout 30000   # ms; read-pool statements (SELECT/SHOW/WITH/DESC) fail after this; 0 = off
    set kora_sql_acquire_timeout 30000 # ms a call may wait for a free pool connection; 0 = forever
    set kora_sql_pool_queue_limit 10000 # callers waiting per pool before new calls fail fast; 0 = unbounded
    set kora_sql_max_start_transactions 0 # concurrent startTransaction callbacks; 0 = write pool size - 2
-   set kora_sql_stats_max_fingerprints 2000 # distinct query shapes kept by /qbsql stats
+   set kora_sql_stats_max_fingerprints 2000 # distinct query shapes kept by /kora_sql stats
    set kora_sql_verify_conflict_keys true # warn when a queued table's conflict key is not a PRIMARY/UNIQUE index
    set kora_sql_schema_allow_modify true  # ensureTable `modify = true`; false = only ever warn
-   set qbsql_allow_multiple_statements false
-   set qbsql_debug false
+   set kora_sql_allow_multiple_statements false
+   set kora_sql_debug false
    ```
 
 ### TLS and connection-string options
 The URI form accepts `charset`, `ssl`, `sslmode` and `connectTimeout`:
 ```
-set mysql_connection_string "mysql://user:pass@db.example.com/qbcore?charset=utf8mb4&ssl={\"rejectUnauthorized\":true}"
+set mysql_connection_string "mysql://user:pass@db.example.com/kora_core?charset=utf8mb4&ssl={\"rejectUnauthorized\":true}"
 ```
 - `ssl` is oxmysql's form: a JSON object of mysql2/Node TLS options (`ca`,
   `rejectUnauthorized`, ...) or `true` (TLS with certificate verification) /
@@ -64,7 +64,7 @@ also limited on the server (`max_execution_time` on MySQL,
 `max_statement_time` on MariaDB, set per read connection). Writes are never
 timed out client-side, because a timed-out write may still commit. Any call
 waiting longer than `kora_sql_acquire_timeout` for a free connection fails with
-`QBSQL_ACQUIRE_TIMEOUT` without having run. When more than
+`KORA_SQL_ACQUIRE_TIMEOUT` without having run. When more than
 `kora_sql_pool_queue_limit` callers are already waiting, new calls fail at once
 with `Queue limit reached.`. Before the database is first reachable, at most
 100000 fire-and-forget `enqueue` calls are held; further calls are dropped
@@ -316,18 +316,18 @@ oxmysql's `typeCast` by default: `TINYINT(1)`/`BIT(1)` → boolean, `DATETIME`/`
 only dates and JSON (as upstream). `set kora_sql_ox_typecast false` disables it; the native
 `Kora.sql.*` / `exports.kora_sql:*` API is never converted.
 
-## Console commands (`command.qbsql` ace, or the server console)
-- `/qbsql ping` — SELECT VERSION() + round-trip time.
-- `/qbsql stats` — query aggregates + queue coalescing counters.
-- `/qbsql slow [n]` — the n slowest queries, with the resource that issued each.
-- `/qbsql queue` — pending queue depth / retries / dead-letters.
-- `/qbsql flush` — force-drain the write queue.
-- `/qbsql bench [n]` — A/B: n individual writes vs one `enqueueMany` + flush,
+## Console commands (`command.kora_sql` ace, or the server console)
+- `/kora_sql ping` — SELECT VERSION() + round-trip time.
+- `/kora_sql stats` — query aggregates + queue coalescing counters.
+- `/kora_sql slow [n]` — the n slowest queries, with the resource that issued each.
+- `/kora_sql queue` — pending queue depth / retries / dead-letters.
+- `/kora_sql flush` — force-drain the write queue.
+- `/kora_sql bench [n]` — A/B: n individual writes vs one `enqueueMany` + flush,
   printing wall-clock, round trips, and boundary crossings for each.
 
 ## Behaviour notes & caveats
 - **Multi-statement queries are refused** by default (one statement per call).
-  Set `qbsql_allow_multiple_statements true` to allow them and accept the
+  Set `kora_sql_allow_multiple_statements true` to allow them and accept the
   SQL-injection amplification risk.
 - **Protocol choice.** A call with bind values is prepared (binary protocol,
   cached per connection). A call with **no** bind values (typically SQL with
@@ -347,7 +347,7 @@ only dates and JSON (as upstream). `set kora_sql_ox_typecast false` disables it;
   the real calling resource (`GetInvokingResource()`). A resource name passed
   as the trailing argument is honoured only when kora_sql's own compat shims
   forward it.
-- **`/qbsql stats` fingerprints** replace string and number literals with `?`,
+- **`/kora_sql stats` fingerprints** replace string and number literals with `?`,
   so concatenated SQL is grouped by shape. At most
   `kora_sql_stats_max_fingerprints` shapes are kept; older ones are counted
   under `<other>`.

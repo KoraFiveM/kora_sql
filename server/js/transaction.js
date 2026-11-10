@@ -162,7 +162,7 @@ class TransactionRunner {
             return true;
         } catch (err) {
             try { await conn.rollback(); } catch (_) { discard = true; }
-            console.error(`qbsql transaction rolled back: ${err.message}`);
+            console.error(`kora_sql transaction rolled back: ${err.message}`);
             if (typeof globalThis.TriggerEvent === 'function') {
                 globalThis.TriggerEvent('oxmysql:transaction-error', {
                     query: statements.map((st) => `${st.sql} ${JSON.stringify(st.params)}`).join('\n'),
@@ -237,7 +237,7 @@ class TransactionRunner {
             } else {
                 discard = true;
             }
-            console.error(`qbsql startTransaction failed: ${err.message}`);
+            console.error(`kora_sql startTransaction failed: ${err.message}`);
             return false;
         } finally {
             clearTimeout(timeout);

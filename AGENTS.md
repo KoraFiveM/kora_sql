@@ -29,7 +29,7 @@ with `oxmysql`, `mysql-async`, and `ghmattimysql`. The performance thesis is
    assignment. **Only sound in assign mode**; a hard `assert` forbids padding in
    accumulate mode (a duplicated row would double-count).
 5. **One boundary crossing per flush**. `enqueueMany` takes an array of rows —
-   N players, one Lua→JS crossing. `/qbsql bench` measures this A/B directly.
+   N players, one Lua→JS crossing. `/kora_sql bench` measures this A/B directly.
 
 ## Configuration split (why convars AND config.lua)
 The Node host cannot read Lua's `Config`. Anything the pool needs at boot
@@ -90,7 +90,7 @@ variants (`oxQuery`, `oxSingle`, `oxScalar`, `oxInsert`, `oxUpdate`, `oxPrepare`
 
 ## Refused, loudly
 - Multi-statement queries (`multipleStatements: false`; config-gated escape hatch
-  `qbsql_allow_multiple_statements`, default off).
+  `kora_sql_allow_multiple_statements`, default off).
 - `store()` handles surviving a restart (in-memory `Map`; warns on unknown handle).
 - Raw connection handles (no such API; the refusal points at `transaction`).
 The first `*Sync` use per calling resource prints once, naming the resource.
@@ -110,7 +110,7 @@ need a yarn builder or runtime `node_modules`. Keep `yarn.lock` committed and
 highest-value test in the project** — the batch builder is where a silent
 data-corruption bug would live, so its exact wire text is pinned byte-for-byte.
 `test/js/queue.test.js` pins the coalescing contract against a fake pool (no DB).
-`test/integration/` runs only when `QBSQL_TEST_DSN` is set. NOTE: the resource
+`test/integration/` runs only when `KORA_SQL_TEST_DSN` is set. NOTE: the resource
 path contains `[test]`, which Node's `--test` treats as a glob character class —
 `run.sh` cd's into the test dir and uses relative, bracket-free paths.
 

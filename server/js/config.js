@@ -64,7 +64,7 @@ function applyOption(out, key, value) {
             return;
         case 'connecttimeout': {
             const n = parseInt(value, 10);
-            if (!Number.isFinite(n) || n <= 0) throw new Error(`qbsql: connectTimeout must be a positive number of milliseconds, got '${value}'`);
+            if (!Number.isFinite(n) || n <= 0) throw new Error(`kora_sql: connectTimeout must be a positive number of milliseconds, got '${value}'`);
             out.connectTimeout = n;
             return;
         }
@@ -76,8 +76,8 @@ function applyOption(out, key, value) {
 function parseConnectionString(str) {
     if (!str) {
         throw new Error(
-            'qbsql: no `mysql_connection_string` convar set. Add e.g. ' +
-            "`set mysql_connection_string \"mysql://user:pass@localhost/qbcore?charset=utf8mb4\"` to server.cfg."
+            'kora_sql: no `mysql_connection_string` convar set. Add e.g. ' +
+            "`set mysql_connection_string \"mysql://user:pass@localhost/kora_core?charset=utf8mb4\"` to server.cfg."
         );
     }
 
@@ -121,7 +121,7 @@ function parseConnectionString(str) {
     }
 
     if (!out.database) {
-        throw new Error('qbsql: connection string is missing a database name.');
+        throw new Error('kora_sql: connection string is missing a database name.');
     }
 
     return out;
@@ -132,8 +132,8 @@ function load() {
 
     const cfg = {
         connection,
-        readPoolSize: getIntConvar('qbsql_read_pool_size', 16),
-        writePoolSize: getIntConvar('qbsql_write_pool_size', 8),
+        readPoolSize: getIntConvar('kora_sql_read_pool_size', 16),
+        writePoolSize: getIntConvar('kora_sql_write_pool_size', 8),
         flushPoolSize: Math.max(0, getIntConvar('kora_sql_flush_pool_size', 4)),
         queryTimeout: Math.max(0, getIntConvar('kora_sql_query_timeout', 30000)),
         acquireTimeout: Math.max(0, getIntConvar('kora_sql_acquire_timeout', 30000)),
@@ -142,19 +142,19 @@ function load() {
         statsMaxFingerprints: Math.max(1, getIntConvar('kora_sql_stats_max_fingerprints', 2000)),
         verifyConflictKeys: getBoolConvar('kora_sql_verify_conflict_keys', true),
         schemaAllowModify: getBoolConvar('kora_sql_schema_allow_modify', true),
-        statementCache: getRenamedIntConvar('kora_sql_statement_cache', 'qbsql_statement_cache', 256),
-        flushInterval: getIntConvar('qbsql_flush_interval', 250),
-        maxPendingRows: getIntConvar('qbsql_max_pending_rows', 500),
-        maxRowsPerStatement: getIntConvar('qbsql_max_rows_per_statement', 200),
-        maxPlaceholders: getIntConvar('qbsql_max_placeholders', 60000),
-        padToBuckets: getBoolConvar('qbsql_pad_to_buckets', true),
-        slowThreshold: getIntConvar('qbsql_slow_threshold', 150),
-        slowRing: getIntConvar('qbsql_slow_ring', 200),
-        allowMultipleStatements: getBoolConvar('qbsql_allow_multiple_statements', false),
-        connectRetryInterval: Math.max(250, getIntConvar('qbsql_connect_retry_interval', 2000)),
+        statementCache: getIntConvar('kora_sql_statement_cache', 256),
+        flushInterval: getIntConvar('kora_sql_flush_interval', 250),
+        maxPendingRows: getIntConvar('kora_sql_max_pending_rows', 500),
+        maxRowsPerStatement: getIntConvar('kora_sql_max_rows_per_statement', 200),
+        maxPlaceholders: getIntConvar('kora_sql_max_placeholders', 60000),
+        padToBuckets: getBoolConvar('kora_sql_pad_to_buckets', true),
+        slowThreshold: getIntConvar('kora_sql_slow_threshold', 150),
+        slowRing: getIntConvar('kora_sql_slow_ring', 200),
+        allowMultipleStatements: getBoolConvar('kora_sql_allow_multiple_statements', false),
+        connectRetryInterval: Math.max(250, getIntConvar('kora_sql_connect_retry_interval', 2000)),
         oxTypeCast: getBoolConvar('kora_sql_ox_typecast', true),
         defaultCollate: getConvar('kora_sql_default_collate', 'utf8mb4_unicode_ci'),
-        debug: getBoolConvar('qbsql_debug', false),
+        debug: getBoolConvar('kora_sql_debug', false),
     };
 
     log.setDebug(cfg.debug);
@@ -171,7 +171,7 @@ function load() {
     }
     if (worstCasePrepared > 8000) {
         throw new Error(
-            `qbsql: kora_sql_statement_cache (${cfg.statementCache}) x total connections (${totalConns}) ` +
+            `kora_sql: kora_sql_statement_cache (${cfg.statementCache}) x total connections (${totalConns}) ` +
             `= ${worstCasePrepared} prepared statements, over the safe ceiling of 8000 ` +
             `(MySQL max_prepared_stmt_count defaults to 16382, and it is GLOBAL on a shared host). ` +
             `Lower kora_sql_statement_cache or the pool sizes.`

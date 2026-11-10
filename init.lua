@@ -3,7 +3,7 @@ assert(Kora, '@kora_sql/init.lua must be loaded AFTER @kora_lib/init.lua (add it
 
 Kora.sql = Kora.sql or {}
 
-Kora.sql.NULL = '\0qbsql:null\0'
+Kora.sql.NULL = '\0kora_sql:null\0'
 
 local driver = exports.kora_sql
 
@@ -66,7 +66,7 @@ local function await(name, ...)
             expire = function()
                 if settled then return end
                 settled = true
-                p:reject(('qbsql: no reply to %s within %dms; the statement may still complete'):format(name, limit))
+                p:reject(('kora_sql: no reply to %s within %dms; the statement may still complete'):format(name, limit))
             end,
         }
         startWatchdog()
@@ -87,7 +87,7 @@ function Kora.sql.ready(timeoutMs)
     if driverReady() then return true end
     local deadline = GetGameTimer() + (timeoutMs or (Config and Config.sql and Config.sql.readyTimeout) or 60000)
     while not driverReady() do
-        if GetGameTimer() > deadline then return false, 'qbsql not ready within timeout' end
+        if GetGameTimer() > deadline then return false, 'kora_sql not ready within timeout' end
         Wait(50)
     end
     return true

@@ -12,7 +12,7 @@ function reply(name, cb, ...args) {
 }
 
 function register(api, exports, opts = {}) {
-    if (typeof exports !== 'function') throw new Error('qbsql/exports: registrar not supplied');
+    if (typeof exports !== 'function') throw new Error('kora_sql/exports: registrar not supplied');
 
     const getInvoker = opts.getInvokingResource
         || (typeof globalThis.GetInvokingResource === 'function' ? () => globalThis.GetInvokingResource() : null);
@@ -91,18 +91,18 @@ function register(api, exports, opts = {}) {
         if (preReadyEnqueues >= PRE_READY_ENQUEUE_LIMIT) {
             preReadyDropped++;
             if (preReadyDropped === 1) {
-                log.error('exports', `qbsql: ${name} dropped: ${PRE_READY_ENQUEUE_LIMIT} writes are already waiting for the database to become ready`);
+                log.error('exports', `kora_sql: ${name} dropped: ${PRE_READY_ENQUEUE_LIMIT} writes are already waiting for the database to become ready`);
             }
             return;
         }
         preReadyEnqueues++;
         api.ready()
             .then(impl)
-            .catch((err) => log.error('exports', `${name} failed before qbsql became ready: ${err.message}`))
+            .catch((err) => log.error('exports', `${name} failed before kora_sql became ready: ${err.message}`))
             .finally(() => {
                 preReadyEnqueues--;
                 if (preReadyEnqueues === 0 && preReadyDropped > 0) {
-                    log.error('exports', `qbsql: ${preReadyDropped} fire-and-forget write(s) were dropped while waiting for the database`);
+                    log.error('exports', `kora_sql: ${preReadyDropped} fire-and-forget write(s) were dropped while waiting for the database`);
                     preReadyDropped = 0;
                 }
             });

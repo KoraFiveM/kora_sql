@@ -1,9 +1,9 @@
 local isReady = false
 
-AddEventHandler('qbsql:internal:ready', function(version)
+AddEventHandler('kora_sql:internal:ready', function(version)
     isReady = true
-    print(('^5[qbsql:ready]^7 driver up: %s'):format(version and version.server or 'unknown'))
-    TriggerEvent('qbsql:ready', version)
+    print(('^5[kora_sql:ready]^7 driver up: %s'):format(version and version.server or 'unknown'))
+    TriggerEvent('kora_sql:ready', version)
 end)
 
 Ready = Ready or {}

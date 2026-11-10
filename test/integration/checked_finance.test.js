@@ -7,9 +7,9 @@ const mysql = require('mysql2/promise');
 const { TransactionRunner } = require('../../server/js/transaction');
 
 test('checked finance SQL commits receipts and rejects zero-row domain changes on MariaDB', {
-    skip: !process.env.QBSQL_TEST_SOCKET,
+    skip: !process.env.KORA_SQL_TEST_SOCKET,
 }, async () => {
-    const pool = mysql.createPool({ socketPath: process.env.QBSQL_TEST_SOCKET, user: 'root', database: 'finance_test', multipleStatements: true });
+    const pool = mysql.createPool({ socketPath: process.env.KORA_SQL_TEST_SOCKET, user: 'root', database: 'finance_test', multipleStatements: true });
     const runner = new TransactionRunner({ write: pool });
     try {
         await pool.query(`CREATE TABLE players (citizenid VARCHAR(50) PRIMARY KEY, money LONGTEXT, deleted_at TIMESTAMP NULL) ENGINE=InnoDB;
@@ -44,7 +44,7 @@ test('checked finance SQL commits receipts and rejects zero-row domain changes o
         assert.equal((await restarted.transactionChecked(request('sale'))).code, 'duplicate');
         assert.equal((await pool.query('SELECT owner,revision FROM property'))[0][0].revision, 2);
         assert.equal((await runner.transactionChecked([{ query: playerUpdate, values: [0,'BUYER',0,0,0], expectedRows: 1 }])).success, true, 'unchanged matched rows retain mysql2 FOUND_ROWS semantics');
-        await pool.query('INSERT INTO kora_core_player_column_operations (citizenid,column_name,resource,operation_key,fingerprint) VALUES (?,?,?,?,?)', ['BUYER','money','kora_banking','qbhousing:sale','[["BUYER"],["money"]]']);
+        await pool.query('INSERT INTO kora_core_player_column_operations (citizenid,column_name,resource,operation_key,fingerprint) VALUES (?,?,?,?,?)', ['BUYER','money','kora_banking','kora_housing:sale','[["BUYER"],["money"]]']);
         assert.equal((await pool.query('SELECT COUNT(*) AS n FROM kora_core_player_column_operations'))[0][0].n, 1);
         await pool.query("UPDATE players SET money='{\"bank\":-100}' WHERE citizenid='SELLER'");
         assert.equal((await runner.transactionChecked([{ query: playerUpdate, values: [20,'SELLER',0,0,20], expectedRows: 1 }])).success, true);

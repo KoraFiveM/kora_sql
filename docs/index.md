@@ -30,11 +30,11 @@ else in the [qbcore2](https://github.com/qbcore2) set depends on it. It needs:
 
 ## Installation
 
-`kora_sql` must be `ensure`d before kora_lib/qbcore (and before any other resource
+`kora_sql` must be `ensure`d before kora_lib/kora_core (and before any other resource
 that queries the database) so the pool exists when they boot:
 
 ```
-set mysql_connection_string "mysql://user:pass@localhost/qbcore?charset=utf8mb4"
+set mysql_connection_string "mysql://user:pass@localhost/kora_core?charset=utf8mb4"
 ensure kora_sql
 ensure kora_lib
 ensure kora_core
@@ -45,16 +45,16 @@ the committed bundle and do not need Yarn or a package install.
 
 Optional convars (defaults shown):
 ```
-set qbsql_read_pool_size 16
-set qbsql_write_pool_size 8
-set kora_sql_statement_cache 256      # cache * (read+write pools) must be <= 8000 (old name qbsql_statement_cache still read)
+set kora_sql_read_pool_size 16
+set kora_sql_write_pool_size 8
+set kora_sql_statement_cache 256      # cache * (read+write pools) must be <= 8000 (old name kora_sql_statement_cache still read)
 set kora_sql_default_collate utf8mb4_unicode_ci # collation for tables ensureTable creates without one; "" = server default
-set qbsql_flush_interval 250       # ms between coalescing flushes
-set qbsql_max_pending_rows 500     # high-water mark that forces a flush
-set qbsql_slow_threshold 150       # ms; queries slower than this hit the slow log
-set qbsql_allow_multiple_statements false
+set kora_sql_flush_interval 250       # ms between coalescing flushes
+set kora_sql_max_pending_rows 500     # high-water mark that forces a flush
+set kora_sql_slow_threshold 150       # ms; queries slower than this hit the slow log
+set kora_sql_allow_multiple_statements false
 set kora_sql_ox_typecast true      # oxmysql-style result conversion on the oxmysql path (see below)
-set qbsql_debug false
+set kora_sql_debug false
 ```
 
 kora_sql serves `exports.oxmysql:*` / `exports['mysql-async']:*` itself, so those
@@ -157,7 +157,7 @@ MySQL.Async.execute('UPDATE players SET last_updated = NOW() WHERE citizenid = ?
 
 ### Benchmark the coalescing win
 ```
-/qbsql bench 500
+/kora_sql bench 500
 ```
 Runs an A/B on a scratch table: 500 individual `execute()` upserts (500 round
 trips, 500 Lua→JS boundary crossings) versus one `enqueueMany` + `flush` of the
@@ -184,7 +184,7 @@ Kora.sql.transaction(sql, paramSets)            -- oxmysql's "one query, many pa
 Kora.sql.upsert(table, conflictKey, rows, opts) -- immediate awaited batched upsert (enqueueMany + flush in one call)
 Kora.sql.ensureTables(specs)                   -- create missing tables, add missing columns/indexes/FKs (see docs.md)
 Kora.sql.flush(table?) -> boolean, errString    -- yields until the table (or everything) has drained
-Kora.sql.stats()                                -- query + queue counters (same data as `/qbsql stats`)
+Kora.sql.stats()                                -- query + queue counters (same data as `/kora_sql stats`)
 Kora.sql.NULL                                   -- sentinel for an explicit SQL NULL bind value
 ```
 
@@ -213,7 +213,7 @@ transaction input shapes, rollback-to-`false`, and the
 `oxmysql:transaction-error` event are retained. `rawExecute` exposes raw
 rows/result headers without mysql2 field metadata, and oxmysql `store` returns
 the SQL text unchanged. Multi-statement strings are refused unless
-`qbsql_allow_multiple_statements true` is set. Slow queries are
+`kora_sql_allow_multiple_statements true` is set. Slow queries are
 attributed to the original calling resource, not to kora_sql.
 
 ### mysql-async compat
@@ -227,19 +227,19 @@ lazy `MySQL.Async.*`/`MySQL.Sync.*`, stored-query handles,
 `exports.ghmattimysql:*` is registered the same way as the oxmysql bridge, for
 resources still written against that driver.
 
-### Console commands (`command.qbsql` ace, or the server console)
+### Console commands (`command.kora_sql` ace, or the server console)
 ```
-/qbsql ping      -- SELECT VERSION() + round-trip time
-/qbsql stats     -- query aggregates + queue coalescing counters
-/qbsql slow [n]  -- the n slowest queries, with the resource that issued each
-/qbsql queue     -- pending queue depth / retries / dead-letters
-/qbsql flush     -- force-drain the write queue
-/qbsql bench [n] -- A/B: n individual writes vs one enqueueMany + flush
+/kora_sql ping      -- SELECT VERSION() + round-trip time
+/kora_sql stats     -- query aggregates + queue coalescing counters
+/kora_sql slow [n]  -- the n slowest queries, with the resource that issued each
+/kora_sql queue     -- pending queue depth / retries / dead-letters
+/kora_sql flush     -- force-drain the write queue
+/kora_sql bench [n] -- A/B: n individual writes vs one enqueueMany + flush
 ```
 
 ### Behaviour notes
 - **Multi-statement queries are refused** by default (one statement per call);
-  `qbsql_allow_multiple_statements true` lifts this and accepts the SQL-injection
+  `kora_sql_allow_multiple_statements true` lifts this and accepts the SQL-injection
   amplification risk.
 - **`store()` handles do not survive a restart** — in-memory only.
 - **DECIMAL/BIGINT columns come back as numbers**, matching oxmysql, not strings.
@@ -266,8 +266,8 @@ waits before rejecting), `Config.sql.readyTimeout` (60s, how long
 Part of the [qbcore2](https://github.com/qbcore2) resource set:
 
 - [kora_lib](https://qbcore2.github.io/kora_lib/) — shared helper library
-- [qbcore](https://qbcore2.github.io/kora_core/) — framework core
-- [qbinventory](https://qbcore2.github.io/kora_inventory/) — headless inventory
-- [qbtarget](https://qbcore2.github.io/kora_target/) — targeting/interaction
-- [qbclothing](https://qbcore2.github.io/kora_clothing/) — clothing/wardrobe
+- [kora_core](https://qbcore2.github.io/kora_core/) — framework core
+- [kora_inventory](https://qbcore2.github.io/kora_inventory/) — headless inventory
+- [kora_target](https://qbcore2.github.io/kora_target/) — targeting/interaction
+- [kora_clothing](https://qbcore2.github.io/kora_clothing/) — clothing/wardrobe
 - [full resource list ↗](https://github.com/orgs/qbcore2/repositories)

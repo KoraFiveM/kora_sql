@@ -47,8 +47,8 @@ function withAcquireTimeout(pool, ms, name) {
         const timer = setTimeout(() => {
             if (settled) return;
             settled = true;
-            const err = new Error(`qbsql: no ${name} connection became free within ${ms}ms`);
-            err.code = 'QBSQL_ACQUIRE_TIMEOUT';
+            const err = new Error(`kora_sql: no ${name} connection became free within ${ms}ms`);
+            err.code = 'KORA_SQL_ACQUIRE_TIMEOUT';
             reject(err);
         }, ms);
         pool.getConnection().then((conn) => {

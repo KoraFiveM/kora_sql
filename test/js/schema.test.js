@@ -32,7 +32,7 @@ test('buildCreate renders columns, keys, foreign keys and table options', () => 
 });
 
 test('validateSpec rejects unsafe identifiers, types and keywords', () => {
-    const bad = (mutate) => assert.throws(() => { const s = spec(); mutate(s); validateSpec(s); }, /qbsql schema/);
+    const bad = (mutate) => assert.throws(() => { const s = spec(); mutate(s); validateSpec(s); }, /kora_sql schema/);
     bad((s) => { s.name = 'x`; DROP TABLE y; --'; });
     bad((s) => { s.columns[0].name = 'a b'; });
     bad((s) => { s.columns[1].type = 'varchar(50); DROP TABLE x'; });
@@ -168,7 +168,7 @@ test('ensureTables runs in order and stops at the first failure', async () => {
     const created = executed.filter((e) => e.text.startsWith('CREATE TABLE')).map((e) => e.text.match(/`(\w+)`/)[1]);
     assert.deepEqual(created, ['a', 'b']);
 
-    await assert.rejects(manager.ensureTables([{ name: 'bad name', columns: [] }, { name: 'c', columns: [{ name: 'id', type: 'int' }] }], 'demo'), /qbsql schema/);
+    await assert.rejects(manager.ensureTables([{ name: 'bad name', columns: [] }, { name: 'c', columns: [{ name: 'id', type: 'int' }] }], 'demo'), /kora_sql schema/);
     assert.ok(!executed.some((e) => e.text.includes('`c`')));
 });
 
@@ -194,7 +194,7 @@ test('generated columns, checks, comments and AFTER are rendered; expressions ca
     assert.ok(result.statements.some((x) => /ADD COLUMN `active`.* AFTER `amount`$/.test(x)));
     assert.deepEqual(result.added.checks, ['chk_amount']);
 
-    const bad = (mutate) => assert.throws(() => { const x = { name: 't', columns: [{ name: 'a', type: 'int', generated: { expr: '1' } }] }; mutate(x); validateSpec(x); }, /qbsql schema/);
+    const bad = (mutate) => assert.throws(() => { const x = { name: 't', columns: [{ name: 'a', type: 'int', generated: { expr: '1' } }] }; mutate(x); validateSpec(x); }, /kora_sql schema/);
     bad((x) => { x.columns[0].generated.expr = '1); DROP TABLE y; --'; });
     bad((x) => { x.checks = [{ name: 'c', expr: '1 /* x */' }]; });
     bad((x) => { x.columns[0].default = 1; });
@@ -349,7 +349,7 @@ test('S2: schema and queue share one identifier rule', () => {
     const { IDENT } = require('../../server/js/ident.js');
     assert.ok(IDENT.test('players'));
     assert.ok(!IDENT.test('players.money'));
-    assert.throws(() => validateSpec({ name: 'players.money', columns: [{ name: 'id', type: 'int' }] }), /qbsql schema: invalid table name/);
+    assert.throws(() => validateSpec({ name: 'players.money', columns: [{ name: 'id', type: 'int' }] }), /kora_sql schema: invalid table name/);
 });
 
 test('extend tables add columns to an existing table but refuse to create or seed one', async () => {

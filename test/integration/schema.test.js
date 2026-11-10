@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const mysql = require('mysql2/promise');
 const { SchemaManager, NULL_SENTINEL } = require('../../server/js/schema');
 
-const dsn = process.env.QBSQL_TEST_DSN;
+const dsn = process.env.KORA_SQL_TEST_DSN;
 const disposable = dsn && /\/[A-Za-z0-9_]*_test(\?|$)/.test(dsn);
 
 test('ensureTable creates, re-runs as a no-op, repairs drift and only warns on type changes', {
@@ -84,7 +84,7 @@ test('generated columns, checks, modify and extend converge on a real database',
             { name: 'kind', type: 'enum', values: kinds, default: 'a', modify: true, after: 'amount' },
         ],
         indexes: [{ name: 'uk_active', columns: ['active'], unique: true }],
-        checks: [{ name: 'chk_qbsql_amount', expr: '`amount` >= 0' }],
+        checks: [{ name: 'chk_kora_sql_amount', expr: '`amount` >= 0' }],
         seed: { rows: [{ amount: 3 }] },
     });
     try {
@@ -106,10 +106,10 @@ test('generated columns, checks, modify and extend converge on a real database',
         const widened = await manager.ensureTable(gen(['a', 'b', 'c']), 'itest');
         assert.deepEqual(widened.modified_columns, ['kind']);
 
-        await pool.query('ALTER TABLE `kora_sql_t_gen` DROP CONSTRAINT `chk_qbsql_amount`');
+        await pool.query('ALTER TABLE `kora_sql_t_gen` DROP CONSTRAINT `chk_kora_sql_amount`');
         await pool.query('ALTER TABLE `kora_sql_t_gen` DROP INDEX `uk_active`, DROP COLUMN `cash`');
         const repaired = await manager.ensureTable(gen(['a', 'b', 'c']), 'itest');
-        assert.deepEqual([repaired.added_columns, repaired.added_indexes, repaired.added_checks], [['cash'], ['uk_active'], ['chk_qbsql_amount']]);
+        assert.deepEqual([repaired.added_columns, repaired.added_indexes, repaired.added_checks], [['cash'], ['uk_active'], ['chk_kora_sql_amount']]);
 
         await pool.query('CREATE TABLE `kora_sql_t_ext` (`citizenid` VARCHAR(50) NOT NULL, PRIMARY KEY (`citizenid`)) ENGINE=InnoDB');
         const extend = { name: 'kora_sql_t_ext', extend: true, columns: [{ name: 'citizenid', type: 'varchar(50)' }, { name: 'flag', type: 'tinyint', null: true }] };

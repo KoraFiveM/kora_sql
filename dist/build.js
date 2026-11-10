@@ -18,16 +18,16 @@ var require_logger = __commonJS({
     module2.exports = {
       setDebug,
       info(tag, msg) {
-        console.log(`^5[qbsql:${tag}]^7 ${msg}`);
+        console.log(`^5[kora_sql:${tag}]^7 ${msg}`);
       },
       warn(tag, msg) {
-        console.log(`^3[qbsql:${tag}]^7 ${msg}`);
+        console.log(`^3[kora_sql:${tag}]^7 ${msg}`);
       },
       error(tag, msg) {
-        console.log(`^1[qbsql:${tag}]^7 ${msg}`);
+        console.log(`^1[kora_sql:${tag}]^7 ${msg}`);
       },
       debug(tag, msg) {
-        if (debugEnabled) console.log(`^8[qbsql:${tag}:debug]^7 ${msg}`);
+        if (debugEnabled) console.log(`^8[kora_sql:${tag}:debug]^7 ${msg}`);
       }
     };
   }
@@ -104,7 +104,7 @@ var require_config = __commonJS({
           return;
         case "connecttimeout": {
           const n = parseInt(value, 10);
-          if (!Number.isFinite(n) || n <= 0) throw new Error(`qbsql: connectTimeout must be a positive number of milliseconds, got '${value}'`);
+          if (!Number.isFinite(n) || n <= 0) throw new Error(`kora_sql: connectTimeout must be a positive number of milliseconds, got '${value}'`);
           out.connectTimeout = n;
           return;
         }
@@ -116,7 +116,7 @@ var require_config = __commonJS({
     function parseConnectionString(str) {
       if (!str) {
         throw new Error(
-          'qbsql: no `mysql_connection_string` convar set. Add e.g. `set mysql_connection_string "mysql://user:pass@localhost/qbcore?charset=utf8mb4"` to server.cfg.'
+          'kora_sql: no `mysql_connection_string` convar set. Add e.g. `set mysql_connection_string "mysql://user:pass@localhost/kora_core?charset=utf8mb4"` to server.cfg.'
         );
       }
       const out = {
@@ -155,7 +155,7 @@ var require_config = __commonJS({
         }
       }
       if (!out.database) {
-        throw new Error("qbsql: connection string is missing a database name.");
+        throw new Error("kora_sql: connection string is missing a database name.");
       }
       return out;
     }
@@ -164,8 +164,8 @@ var require_config = __commonJS({
       const connection = parseConnectionString(getConvar("mysql_connection_string", null));
       const cfg = {
         connection,
-        readPoolSize: getIntConvar("qbsql_read_pool_size", 16),
-        writePoolSize: getIntConvar("qbsql_write_pool_size", 8),
+        readPoolSize: getIntConvar("kora_sql_read_pool_size", 16),
+        writePoolSize: getIntConvar("kora_sql_write_pool_size", 8),
         // A separate small pool for the write queue's flush, so ad-hoc writes,
         // transactions and schema work cannot starve player saves. 0 = flush
         // on the write pool (the previous behaviour).
@@ -179,28 +179,28 @@ var require_config = __commonJS({
         poolQueueLimit: Math.max(0, getIntConvar("kora_sql_pool_queue_limit", 1e4)),
         // Concurrent startTransaction callbacks (each pins a write connection for up to 30 s).
         maxStartTransactions: Math.max(0, getIntConvar("kora_sql_max_start_transactions", 0)),
-        // Distinct query fingerprints kept by /qbsql stats; older ones fold into <other>.
+        // Distinct query fingerprints kept by /kora_sql stats; older ones fold into <other>.
         statsMaxFingerprints: Math.max(1, getIntConvar("kora_sql_stats_max_fingerprints", 2e3)),
         // Check each queued table's conflict key against its PRIMARY/UNIQUE indexes once.
         verifyConflictKeys: getBoolConvar("kora_sql_verify_conflict_keys", true),
         // ensureTable `modify = true` (still owner-only and widening-only).
         schemaAllowModify: getBoolConvar("kora_sql_schema_allow_modify", true),
-        statementCache: getRenamedIntConvar("kora_sql_statement_cache", "qbsql_statement_cache", 256),
-        flushInterval: getIntConvar("qbsql_flush_interval", 250),
-        maxPendingRows: getIntConvar("qbsql_max_pending_rows", 500),
-        maxRowsPerStatement: getIntConvar("qbsql_max_rows_per_statement", 200),
-        maxPlaceholders: getIntConvar("qbsql_max_placeholders", 6e4),
-        padToBuckets: getBoolConvar("qbsql_pad_to_buckets", true),
-        slowThreshold: getIntConvar("qbsql_slow_threshold", 150),
-        slowRing: getIntConvar("qbsql_slow_ring", 200),
-        allowMultipleStatements: getBoolConvar("qbsql_allow_multiple_statements", false),
-        connectRetryInterval: Math.max(250, getIntConvar("qbsql_connect_retry_interval", 2e3)),
+        statementCache: getRenamedIntConvar("kora_sql_statement_cache", "kora_sql_statement_cache", 256),
+        flushInterval: getIntConvar("kora_sql_flush_interval", 250),
+        maxPendingRows: getIntConvar("kora_sql_max_pending_rows", 500),
+        maxRowsPerStatement: getIntConvar("kora_sql_max_rows_per_statement", 200),
+        maxPlaceholders: getIntConvar("kora_sql_max_placeholders", 6e4),
+        padToBuckets: getBoolConvar("kora_sql_pad_to_buckets", true),
+        slowThreshold: getIntConvar("kora_sql_slow_threshold", 150),
+        slowRing: getIntConvar("kora_sql_slow_ring", 200),
+        allowMultipleStatements: getBoolConvar("kora_sql_allow_multiple_statements", false),
+        connectRetryInterval: Math.max(250, getIntConvar("kora_sql_connect_retry_interval", 2e3)),
         // oxmysql-style typeCast on the oxmysql compat exports only (default on, like oxmysql).
         oxTypeCast: getBoolConvar("kora_sql_ox_typecast", true),
         // Collation for tables ensureTable CREATES without an explicit collate
         // (existing tables are never altered). Empty = the server's charset default.
         defaultCollate: getConvar("kora_sql_default_collate", "utf8mb4_unicode_ci"),
-        debug: getBoolConvar("qbsql_debug", false)
+        debug: getBoolConvar("kora_sql_debug", false)
       };
       log2.setDebug(cfg.debug);
       if (cfg.maxStartTransactions === 0) cfg.maxStartTransactions = Math.max(1, cfg.writePoolSize - 2);
@@ -213,7 +213,7 @@ var require_config = __commonJS({
       }
       if (worstCasePrepared > 8e3) {
         throw new Error(
-          `qbsql: kora_sql_statement_cache (${cfg.statementCache}) x total connections (${totalConns}) = ${worstCasePrepared} prepared statements, over the safe ceiling of 8000 (MySQL max_prepared_stmt_count defaults to 16382, and it is GLOBAL on a shared host). Lower kora_sql_statement_cache or the pool sizes.`
+          `kora_sql: kora_sql_statement_cache (${cfg.statementCache}) x total connections (${totalConns}) = ${worstCasePrepared} prepared statements, over the safe ceiling of 8000 (MySQL max_prepared_stmt_count defaults to 16382, and it is GLOBAL on a shared host). Lower kora_sql_statement_cache or the pool sizes.`
         );
       }
       return cfg;
@@ -20818,8 +20818,8 @@ var require_pool4 = __commonJS({
         const timer = setTimeout(() => {
           if (settled) return;
           settled = true;
-          const err = new Error(`qbsql: no ${name} connection became free within ${ms}ms`);
-          err.code = "QBSQL_ACQUIRE_TIMEOUT";
+          const err = new Error(`kora_sql: no ${name} connection became free within ${ms}ms`);
+          err.code = "KORA_SQL_ACQUIRE_TIMEOUT";
           reject(err);
         }, ms);
         pool.getConnection().then((conn) => {
@@ -20966,7 +20966,7 @@ var require_statements = __commonJS({
       recordMiss(sql) {
         this.touch(sql).misses++;
       }
-      // Aggregate stats for /qbsql stats. preparedHitRate here is a coarse proxy
+      // Aggregate stats for /kora_sql stats. preparedHitRate here is a coarse proxy
       // (hits vs misses across cached statements); the precise per-flush prepared
       // hit rate lives in stats.js.
       summary() {
@@ -21268,7 +21268,7 @@ var require_execute3 = __commonJS({
     var { isUnpreparableError } = require_statements();
     var log2 = require_logger();
     var { typeCast, typeCastExecute } = require_typecast();
-    var NULL_SENTINEL = "\0qbsql:null\0";
+    var NULL_SENTINEL = "\0kora_sql:null\0";
     function normalizeParams(params) {
       if (params === null || params === void 0) return [];
       let arr = params;
@@ -21589,7 +21589,7 @@ var require_legacy_inventory = __commonJS({
             pending.delete(finish);
             if (error !== void 0 && error !== null) return reject(new Error(String(error)));
             if (!Number.isSafeInteger(affectedRows) || affectedRows < 0) {
-              return reject(new Error("qbinventory returned an invalid police trash delete count"));
+              return reject(new Error("kora_inventory returned an invalid police trash delete count"));
             }
             resolve({
               fieldCount: 0,
@@ -21736,7 +21736,7 @@ var require_batch = __commonJS({
       const dialect = opts && opts.dialect || "values";
       const pad = opts && opts.pad;
       if (pad && mode === "accumulate") {
-        throw new Error("qbsql/batch: bucket padding is not sound in accumulate mode -- pass pad:false.");
+        throw new Error("kora_sql/batch: bucket padding is not sound in accumulate mode -- pass pad:false.");
       }
       const keyCols = Array.isArray(conflictKey) ? conflictKey : [conflictKey];
       const allCols = keyCols.concat(columns);
@@ -21762,7 +21762,7 @@ var require_batch = __commonJS({
       const mode = opts && opts.mode || "assign";
       const pad = opts && opts.pad;
       if (pad && mode === "accumulate") {
-        throw new Error("qbsql/batch: bucket padding is not sound in accumulate mode -- pass pad:false.");
+        throw new Error("kora_sql/batch: bucket padding is not sound in accumulate mode -- pass pad:false.");
       }
       const keyCols = Array.isArray(conflictKey) ? conflictKey : [conflictKey];
       const effectiveRows = pad ? padRows(rows, bucketFor(rows.length)) : rows;
@@ -21816,7 +21816,7 @@ var require_ident = __commonJS({
     }
     __name(isIdent, "isIdent");
     function assertIdent(value, what, prefix) {
-      if (!isIdent(value)) throw new Error(`${prefix || "qbsql"}: invalid ${what} '${value}'`);
+      if (!isIdent(value)) throw new Error(`${prefix || "kora_sql"}: invalid ${what} '${value}'`);
     }
     __name(assertIdent, "assertIdent");
     module2.exports = { IDENT, isIdent, assertIdent };
@@ -21837,7 +21837,7 @@ var require_queue = __commonJS({
       return err;
     }
     __name(invalid, "invalid");
-    var NULL_SENTINEL = "\0qbsql:null\0";
+    var NULL_SENTINEL = "\0kora_sql:null\0";
     function normalizeWriteParams(params) {
       return Array.from(params, (value) => value === void 0 || value === NULL_SENTINEL ? null : value);
     }
@@ -21851,7 +21851,7 @@ var require_queue = __commonJS({
       } else if (typeof value === "boolean") {
         return value ? "1" : "0";
       }
-      throw invalid("bad-pk", `qbsql/queue: primary key values must be strings or finite numbers (got ${value === null || value === void 0 ? "nil" : typeof value === "number" ? String(value) : typeof value})`);
+      throw invalid("bad-pk", `kora_sql/queue: primary key values must be strings or finite numbers (got ${value === null || value === void 0 ? "nil" : typeof value === "number" ? String(value) : typeof value})`);
     }
     __name(pkComponent, "pkComponent");
     function pkKey(pk) {
@@ -21886,7 +21886,7 @@ var require_queue = __commonJS({
         const n = Number(value);
         if (Number.isFinite(n)) return n;
       }
-      throw invalid("accumulate-value", `qbsql/queue: accumulate mode needs a finite number for ${table}.${column} (got ${typeof value === "string" ? `'${value.slice(0, 32)}'` : String(value)})`);
+      throw invalid("accumulate-value", `kora_sql/queue: accumulate mode needs a finite number for ${table}.${column} (got ${typeof value === "string" ? `'${value.slice(0, 32)}'` : String(value)})`);
     }
     __name(accumulateValue, "accumulateValue");
     var STATEMENT_LEVEL_WRITE_ERRORS = /* @__PURE__ */ new Set([
@@ -22012,7 +22012,7 @@ var require_queue = __commonJS({
           this.pending.set(table, st);
         } else if (st.mode !== mode || st.writeMode !== writeMode || JSON.stringify(st.conflictKey) !== JSON.stringify(conflictKey)) {
           if (st.rows.size > 0 || st.inFlight) {
-            throw invalid("incompatible-options", `qbsql/queue: incompatible queue options for table ${table} while writes are pending.`);
+            throw invalid("incompatible-options", `kora_sql/queue: incompatible queue options for table ${table} while writes are pending.`);
           }
           st.conflictKey = conflictKey;
           st.mode = mode;
@@ -22050,20 +22050,20 @@ var require_queue = __commonJS({
       // Validate a call's table, key and options. Returns the normalised key
       // column list. Throws synchronously, before anything is queued.
       _checkTarget(table, conflictKey, opts) {
-        if (!isIdent(table)) throw invalid("bad-table", `qbsql/queue: invalid table name '${table}'`);
+        if (!isIdent(table)) throw invalid("bad-table", `kora_sql/queue: invalid table name '${table}'`);
         const keyCols = Array.isArray(conflictKey) ? conflictKey : [conflictKey];
         if (keyCols.length === 0 || !keyCols.every(isIdent)) {
-          throw invalid("bad-key", `qbsql/queue: invalid conflict key for ${table}`);
+          throw invalid("bad-key", `kora_sql/queue: invalid conflict key for ${table}`);
         }
         const mode = opts.mode || "assign";
-        if (mode !== "assign" && mode !== "accumulate") throw invalid("bad-mode", `qbsql/queue: unsupported mode '${mode}'.`);
+        if (mode !== "assign" && mode !== "accumulate") throw invalid("bad-mode", `kora_sql/queue: unsupported mode '${mode}'.`);
         const writeMode = opts.writeMode || "upsert";
         if (writeMode !== "upsert" && writeMode !== "update") {
-          throw invalid("bad-write-mode", `qbsql/queue: unsupported writeMode '${writeMode}'.`);
+          throw invalid("bad-write-mode", `kora_sql/queue: unsupported writeMode '${writeMode}'.`);
         }
         let allowed = null;
         if (opts.allowedColumns !== void 0 && opts.allowedColumns !== null) {
-          if (!Array.isArray(opts.allowedColumns)) throw invalid("bad-allowed-columns", "qbsql/queue: allowedColumns must be a list of column names");
+          if (!Array.isArray(opts.allowedColumns)) throw invalid("bad-allowed-columns", "kora_sql/queue: allowedColumns must be a list of column names");
           allowed = new Set(opts.allowedColumns.map((c) => String(c).toLowerCase()));
         }
         return { keyCols, mode, writeMode, allowed };
@@ -22073,22 +22073,22 @@ var require_queue = __commonJS({
       // (with opts.allowedColumns) only the columns the caller allowed.
       _prepareRow(table, target, row) {
         if (!row || typeof row !== "object" || !row.cols || typeof row.cols !== "object" || Array.isArray(row.cols)) {
-          throw invalid("bad-row", `qbsql/queue: rows for ${table} must be { pk = ..., cols = { ... } }`);
+          throw invalid("bad-row", `kora_sql/queue: rows for ${table} must be { pk = ..., cols = { ... } }`);
         }
         const { keyCols, mode, allowed } = target;
         if (Array.isArray(row.pk) ? row.pk.length !== keyCols.length : keyCols.length !== 1) {
-          throw invalid("pk-arity", `qbsql/queue: ${table} needs ${keyCols.length} primary key value(s) per row`);
+          throw invalid("pk-arity", `kora_sql/queue: ${table} needs ${keyCols.length} primary key value(s) per row`);
         }
         const key = pkKey(row.pk);
         const keySet = new Set(keyCols.map((c) => c.toLowerCase()));
         const cols = {};
         const names = Object.keys(row.cols);
-        if (names.length === 0) throw invalid("no-columns", `qbsql/queue: a row for ${table} has no columns to write`);
+        if (names.length === 0) throw invalid("no-columns", `kora_sql/queue: a row for ${table} has no columns to write`);
         for (const name of names) {
-          if (!isIdent(name)) throw invalid("bad-column", `qbsql/queue: invalid column name '${name}' for ${table}`);
+          if (!isIdent(name)) throw invalid("bad-column", `kora_sql/queue: invalid column name '${name}' for ${table}`);
           const lower = name.toLowerCase();
-          if (keySet.has(lower)) throw invalid("key-column", `qbsql/queue: ${table}.${name} is a conflict key column and cannot be written`);
-          if (allowed && !allowed.has(lower)) throw invalid("not-allowed", `qbsql/queue: column ${table}.${name} is not in allowedColumns`);
+          if (keySet.has(lower)) throw invalid("key-column", `kora_sql/queue: ${table}.${name} is a conflict key column and cannot be written`);
+          if (allowed && !allowed.has(lower)) throw invalid("not-allowed", `kora_sql/queue: column ${table}.${name} is not in allowedColumns`);
           cols[name] = mode === "accumulate" ? accumulateValue(table, name, row.cols[name]) : row.cols[name];
         }
         return { key, pk: row.pk, cols };
@@ -22177,7 +22177,7 @@ var require_queue = __commonJS({
         this.stats.countCrossing();
         if (rows && !Array.isArray(rows) && typeof rows === "object" && Object.keys(rows).length === 0) rows = [];
         if (!Array.isArray(rows)) {
-          const err = invalid("not-a-list", `qbsql/queue: enqueueMany for ${table} needs a list of rows`);
+          const err = invalid("not-a-list", `kora_sql/queue: enqueueMany for ${table} needs a list of rows`);
           if (strict) throw err;
           this._reject(resource, table, err, 1);
           return { queued: 0, dropped: 1 };
@@ -22396,7 +22396,7 @@ var require_queue = __commonJS({
       }
       // The error a dead-lettered chunk reports to flush() callers.
       _deadLetterError(table, what, chunk, failed) {
-        return new Error(failed ? `qbsql: write to ${table} failed ${what}; failed to dead-letter ${failed}/${chunk.length} row(s)` : `qbsql: write to ${table} failed ${what}; ${chunk.length} row(s) were dead-lettered`);
+        return new Error(failed ? `kora_sql: write to ${table} failed ${what}; failed to dead-letter ${failed}/${chunk.length} row(s)` : `kora_sql: write to ${table} failed ${what}; ${chunk.length} row(s) were dead-lettered`);
       }
       async _writeWithRetry(table, sql, params, chunk, mode, attempt, reMerged) {
         attempt = attempt || 0;
@@ -22411,7 +22411,7 @@ var require_queue = __commonJS({
             const statementLevel = STATEMENT_LEVEL_WRITE_ERRORS.has(err.code);
             if (chunk.length > 1 && !statementLevel) {
               this._clearReMerged(table, reMerged, mode);
-              const split = new Error(`qbsql: write to ${table} failed (${err.code}); bisecting ${chunk.length} rows`);
+              const split = new Error(`kora_sql: write to ${table} failed (${err.code}); bisecting ${chunk.length} rows`);
               split.bisect = true;
               split.cause = err;
               throw split;
@@ -22657,7 +22657,7 @@ var require_transaction = __commonJS({
           } catch (_) {
             discard = true;
           }
-          console.error(`qbsql transaction rolled back: ${err.message}`);
+          console.error(`kora_sql transaction rolled back: ${err.message}`);
           if (typeof globalThis.TriggerEvent === "function") {
             globalThis.TriggerEvent("oxmysql:transaction-error", {
               query: statements.map((st) => `${st.sql} ${JSON.stringify(st.params)}`).join("\n"),
@@ -22734,7 +22734,7 @@ var require_transaction = __commonJS({
           } else {
             discard = true;
           }
-          console.error(`qbsql startTransaction failed: ${err.message}`);
+          console.error(`kora_sql startTransaction failed: ${err.message}`);
           return false;
         } finally {
           clearTimeout(timeout);
@@ -22892,7 +22892,7 @@ var require_schema = __commonJS({
     var { escape } = require_mysql2();
     var log2 = require_logger();
     var { IDENT } = require_ident();
-    var NULL_SENTINEL = "\0qbsql:null\0";
+    var NULL_SENTINEL = "\0kora_sql:null\0";
     var BASE_TYPE = /^(?:(?:tiny|small|medium|big)?int(?:\(\d{1,2}\))?|integer|decimal\(\d{1,2}(?:,\d{1,2})?\)|numeric\(\d{1,2}(?:,\d{1,2})?\)|float|double|(?:var)?char\(\d{1,5}\)|(?:var)?binary\(\d{1,5}\)|tinytext|text|mediumtext|longtext|tinyblob|blob|mediumblob|longblob|json|date|time(?:\(\d\))?|datetime(?:\(\d\))?|timestamp(?:\(\d\))?|year|boolean|bool|enum|set)$/i;
     var RAW_DEFAULT = /^(?:CURRENT_TIMESTAMP|NOW|LOCALTIMESTAMP)(?:\(\d?\))?$/i;
     var EXPRESSION_BANNED = /;|--|\/\*|\*\//;
@@ -22901,23 +22901,23 @@ var require_schema = __commonJS({
     var q = /* @__PURE__ */ __name((name) => "`" + name + "`", "q");
     var list = /* @__PURE__ */ __name((names) => names.map(q).join(", "), "list");
     function assertIdent(value, what) {
-      if (typeof value !== "string" || !IDENT.test(value)) throw new Error(`qbsql schema: invalid ${what} '${value}'`);
+      if (typeof value !== "string" || !IDENT.test(value)) throw new Error(`kora_sql schema: invalid ${what} '${value}'`);
     }
     __name(assertIdent, "assertIdent");
     function assertExpression(value, what) {
-      if (typeof value !== "string" || value.trim() === "" || EXPRESSION_BANNED.test(value)) throw new Error(`qbsql schema: invalid ${what}`);
+      if (typeof value !== "string" || value.trim() === "" || EXPRESSION_BANNED.test(value)) throw new Error(`kora_sql schema: invalid ${what}`);
     }
     __name(assertExpression, "assertExpression");
     function assertNames(value, what) {
-      if (!Array.isArray(value) || value.length === 0) throw new Error(`qbsql schema: ${what} must be a non-empty list`);
+      if (!Array.isArray(value) || value.length === 0) throw new Error(`kora_sql schema: ${what} must be a non-empty list`);
       value.forEach((name) => assertIdent(name, what));
     }
     __name(assertNames, "assertNames");
     function validateSpec(input, defaults = {}) {
-      if (!input || typeof input !== "object") throw new Error("qbsql schema: spec must be a table");
+      if (!input || typeof input !== "object") throw new Error("kora_sql schema: spec must be a table");
       assertIdent(input.name, "table name");
       if (!Array.isArray(input.columns) || input.columns.length === 0) {
-        throw new Error(`qbsql schema: '${input.name}' needs at least one column`);
+        throw new Error(`kora_sql schema: '${input.name}' needs at least one column`);
       }
       const spec = {
         name: input.name,
@@ -22936,7 +22936,7 @@ var require_schema = __commonJS({
       };
       assertIdent(spec.engine, "engine");
       assertIdent(spec.charset, "charset");
-      if (spec.collate !== null && !COLLATION.test(spec.collate)) throw new Error(`qbsql schema: invalid collation '${spec.collate}'`);
+      if (spec.collate !== null && !COLLATION.test(spec.collate)) throw new Error(`kora_sql schema: invalid collation '${spec.collate}'`);
       const createCollate = typeof defaults.createCollate === "string" ? defaults.createCollate : "";
       if (spec.collate === null && COLLATION.test(createCollate) && createCollate.toLowerCase().startsWith(spec.charset.toLowerCase() + "_")) {
         spec.createCollate = createCollate;
@@ -22944,32 +22944,32 @@ var require_schema = __commonJS({
       const seen = /* @__PURE__ */ new Set();
       for (const col of input.columns) {
         assertIdent(col && col.name, "column name");
-        if (seen.has(col.name)) throw new Error(`qbsql schema: duplicate column '${col.name}' in '${spec.name}'`);
+        if (seen.has(col.name)) throw new Error(`kora_sql schema: duplicate column '${col.name}' in '${spec.name}'`);
         seen.add(col.name);
         if (typeof col.type !== "string" || !BASE_TYPE.test(col.type)) {
-          throw new Error(`qbsql schema: unsupported type '${col.type}' for ${spec.name}.${col.name}`);
+          throw new Error(`kora_sql schema: unsupported type '${col.type}' for ${spec.name}.${col.name}`);
         }
         const base = col.type.toLowerCase();
         if ((base === "enum" || base === "set") && (!Array.isArray(col.values) || col.values.length === 0 || col.values.some((v) => typeof v !== "string"))) {
-          throw new Error(`qbsql schema: ${spec.name}.${col.name} needs a 'values' list`);
+          throw new Error(`kora_sql schema: ${spec.name}.${col.name} needs a 'values' list`);
         }
-        if (col.collate !== void 0 && !COLLATION.test(col.collate)) throw new Error(`qbsql schema: invalid collation for ${spec.name}.${col.name}`);
+        if (col.collate !== void 0 && !COLLATION.test(col.collate)) throw new Error(`kora_sql schema: invalid collation for ${spec.name}.${col.name}`);
         if (col.on_update !== void 0 && !RAW_DEFAULT.test(String(col.on_update))) {
-          throw new Error(`qbsql schema: unsupported on_update for ${spec.name}.${col.name}`);
+          throw new Error(`kora_sql schema: unsupported on_update for ${spec.name}.${col.name}`);
         }
         if (col.default && typeof col.default === "object" && !RAW_DEFAULT.test(String(col.default.raw))) {
-          throw new Error(`qbsql schema: unsupported raw default for ${spec.name}.${col.name}`);
+          throw new Error(`kora_sql schema: unsupported raw default for ${spec.name}.${col.name}`);
         }
         if (col.generated !== void 0) {
           assertExpression(col.generated.expr, `generated expression for ${spec.name}.${col.name}`);
-          if (col.default !== void 0 || col.auto_increment) throw new Error(`qbsql schema: generated column ${spec.name}.${col.name} cannot have a default or auto_increment`);
+          if (col.default !== void 0 || col.auto_increment) throw new Error(`kora_sql schema: generated column ${spec.name}.${col.name} cannot have a default or auto_increment`);
         }
         if (col.after !== void 0) assertIdent(col.after, "after column");
-        if (col.comment !== void 0 && typeof col.comment !== "string") throw new Error(`qbsql schema: invalid comment for ${spec.name}.${col.name}`);
+        if (col.comment !== void 0 && typeof col.comment !== "string") throw new Error(`kora_sql schema: invalid comment for ${spec.name}.${col.name}`);
         spec.columns.push(col);
       }
-      if (spec.extend && (spec.primary || spec.seed)) throw new Error(`qbsql schema: extend table '${spec.name}' cannot declare a primary key or seed rows`);
-      if (spec.comment !== void 0 && typeof spec.comment !== "string") throw new Error(`qbsql schema: invalid comment for '${spec.name}'`);
+      if (spec.extend && (spec.primary || spec.seed)) throw new Error(`kora_sql schema: extend table '${spec.name}' cannot declare a primary key or seed rows`);
+      if (spec.comment !== void 0 && typeof spec.comment !== "string") throw new Error(`kora_sql schema: invalid comment for '${spec.name}'`);
       for (const check of spec.checks) {
         assertIdent(check.name, "check name");
         assertExpression(check.expr, `check expression '${check.name}'`);
@@ -22977,14 +22977,14 @@ var require_schema = __commonJS({
       if (spec.primary) {
         assertNames(spec.primary, "primary key column");
         spec.primary.forEach((c) => {
-          if (!seen.has(c)) throw new Error(`qbsql schema: primary key column '${c}' is not in '${spec.name}'`);
+          if (!seen.has(c)) throw new Error(`kora_sql schema: primary key column '${c}' is not in '${spec.name}'`);
         });
       }
       for (const idx of spec.indexes) {
         assertIdent(idx.name, "index name");
         assertNames(idx.columns, "index column");
         idx.columns.forEach((c) => {
-          if (!seen.has(c)) throw new Error(`qbsql schema: index '${idx.name}' column '${c}' is not in '${spec.name}'`);
+          if (!seen.has(c)) throw new Error(`kora_sql schema: index '${idx.name}' column '${c}' is not in '${spec.name}'`);
         });
       }
       for (const fk of spec.foreign) {
@@ -22993,18 +22993,18 @@ var require_schema = __commonJS({
         assertNames(fk.columns, "foreign key column");
         assertNames(fk.ref_columns, "foreign key reference column");
         fk.columns.forEach((c) => {
-          if (!seen.has(c)) throw new Error(`qbsql schema: foreign key '${fk.name}' column '${c}' is not in '${spec.name}'`);
+          if (!seen.has(c)) throw new Error(`kora_sql schema: foreign key '${fk.name}' column '${c}' is not in '${spec.name}'`);
         });
         for (const key of ["on_delete", "on_update"]) {
           if (fk[key] !== void 0 && !FK_ACTIONS.has(String(fk[key]).toUpperCase())) {
-            throw new Error(`qbsql schema: invalid ${key} for foreign key '${fk.name}'`);
+            throw new Error(`kora_sql schema: invalid ${key} for foreign key '${fk.name}'`);
           }
         }
       }
       if (spec.seed) {
-        if (!Array.isArray(spec.seed.rows)) throw new Error(`qbsql schema: seed.rows for '${spec.name}' must be a list`);
+        if (!Array.isArray(spec.seed.rows)) throw new Error(`kora_sql schema: seed.rows for '${spec.name}' must be a list`);
         spec.seed.rows.forEach((row) => Object.keys(row).forEach((c) => {
-          if (!seen.has(c)) throw new Error(`qbsql schema: seed column '${c}' is not in '${spec.name}'`);
+          if (!seen.has(c)) throw new Error(`kora_sql schema: seed column '${c}' is not in '${spec.name}'`);
         }));
       }
       return spec;
@@ -23206,7 +23206,7 @@ var require_schema = __commonJS({
       if (spec.seed.update) {
         const key = new Set(spec.seed.key || spec.primary || []);
         const updatable = columns.filter((c) => !key.has(c));
-        if (updatable.length === 0) throw new Error(`qbsql schema: seed.update on '${spec.name}' has no non-key columns`);
+        if (updatable.length === 0) throw new Error(`kora_sql schema: seed.update on '${spec.name}' has no non-key columns`);
         sql = `INSERT INTO ${q(spec.name)} (${list(columns)}) VALUES ${placeholders.join(", ")} ON DUPLICATE KEY UPDATE ${updatable.map((c) => `${q(c)} = VALUES(${q(c)})`).join(", ")}`;
       } else {
         sql = `INSERT IGNORE INTO ${q(spec.name)} (${list(columns)}) VALUES ${placeholders.join(", ")}`;
@@ -23310,7 +23310,7 @@ var require_schema = __commonJS({
           const report = { table: spec.name, created: false, added_columns: [], modified_columns: [], added_indexes: [], added_fks: [], added_checks: [], seeded: 0, warnings: [] };
           const actual = await this._inspect(spec.name);
           if (!actual && spec.extend) {
-            throw new Error(`qbsql schema: table '${spec.name}' does not exist, so ${resource || "the caller"} cannot extend it`);
+            throw new Error(`kora_sql schema: table '${spec.name}' does not exist, so ${resource || "the caller"} cannot extend it`);
           }
           if (!actual) {
             await this.pools.write.query(ddl(buildCreate(spec)));
@@ -23368,7 +23368,7 @@ var require_schema = __commonJS({
       // Resolves once every named table exists, so a resource can wait for tables another resource creates.
       async awaitTables(names, timeoutMs, resource) {
         if (!Array.isArray(names) || names.length === 0 || names.some((n) => typeof n !== "string" || !IDENT.test(n))) {
-          throw new Error("qbsql schema: awaitTables expects a list of table names");
+          throw new Error("kora_sql schema: awaitTables expects a list of table names");
         }
         const deadline = Date.now() + (Number(timeoutMs) > 0 ? Number(timeoutMs) : 6e4);
         const unique = [...new Set(names)];
@@ -23386,7 +23386,7 @@ var require_schema = __commonJS({
       }
       // Runs in order so foreign key parents can be listed first. Stops at the first failure.
       async ensureTables(specs, resource) {
-        if (!Array.isArray(specs)) throw new Error("qbsql schema: ensureTables expects a list of table specs");
+        if (!Array.isArray(specs)) throw new Error("kora_sql schema: ensureTables expects a list of table specs");
         const reports = [];
         for (const spec of specs) reports.push(await this.ensureTable(spec, resource));
         return reports;
@@ -23413,7 +23413,7 @@ var require_exports = __commonJS({
     }
     __name(reply, "reply");
     function register2(api2, exports3, opts = {}) {
-      if (typeof exports3 !== "function") throw new Error("qbsql/exports: registrar not supplied");
+      if (typeof exports3 !== "function") throw new Error("kora_sql/exports: registrar not supplied");
       const getInvoker = opts.getInvokingResource || (typeof globalThis.GetInvokingResource === "function" ? () => globalThis.GetInvokingResource() : null);
       const self2 = opts.currentResource || (typeof globalThis.GetCurrentResourceName === "function" ? globalThis.GetCurrentResourceName() : null);
       const warnedClaims = /* @__PURE__ */ new Set();
@@ -23498,15 +23498,15 @@ var require_exports = __commonJS({
         if (preReadyEnqueues >= PRE_READY_ENQUEUE_LIMIT) {
           preReadyDropped++;
           if (preReadyDropped === 1) {
-            log2.error("exports", `qbsql: ${name} dropped: ${PRE_READY_ENQUEUE_LIMIT} writes are already waiting for the database to become ready`);
+            log2.error("exports", `kora_sql: ${name} dropped: ${PRE_READY_ENQUEUE_LIMIT} writes are already waiting for the database to become ready`);
           }
           return;
         }
         preReadyEnqueues++;
-        api2.ready().then(impl).catch((err) => log2.error("exports", `${name} failed before qbsql became ready: ${err.message}`)).finally(() => {
+        api2.ready().then(impl).catch((err) => log2.error("exports", `${name} failed before kora_sql became ready: ${err.message}`)).finally(() => {
           preReadyEnqueues--;
           if (preReadyEnqueues === 0 && preReadyDropped > 0) {
-            log2.error("exports", `qbsql: ${preReadyDropped} fire-and-forget write(s) were dropped while waiting for the database`);
+            log2.error("exports", `kora_sql: ${preReadyDropped} fire-and-forget write(s) were dropped while waiting for the database`);
             preReadyDropped = 0;
           }
         });
@@ -23684,8 +23684,8 @@ var require_startup = __commonJS({
           onRetry(err, attempt, retryInterval);
           await delay(retryInterval);
           if (shouldStop()) {
-            const stopped = new Error("qbsql stopped while waiting for the database");
-            stopped.code = "QBSQL_STOPPING";
+            const stopped = new Error("kora_sql stopped while waiting for the database");
+            stopped.code = "KORA_SQL_STOPPING";
             throw stopped;
           }
         }
@@ -23761,7 +23761,7 @@ var api = {
     return this._ready;
   },
   version() {
-    return this.pools ? { server: this.pools.version.raw, isMariaDB: this.pools.version.isMariaDB, driver: "qbsql/1.0.0" } : { server: "starting", isMariaDB: false, driver: "qbsql/1.0.0" };
+    return this.pools ? { server: this.pools.version.raw, isMariaDB: this.pools.version.isMariaDB, driver: "kora_sql/1.0.0" } : { server: "starting", isMariaDB: false, driver: "kora_sql/1.0.0" };
   },
   ready() {
     return this._readyPromise;
@@ -23801,8 +23801,8 @@ async function boot() {
   });
   if (stopping) {
     await Promise.allSettled(poolBuilder.all(pools).map((pool) => pool.end()));
-    const stopped = new Error("qbsql stopped while waiting for the database");
-    stopped.code = "QBSQL_STOPPING";
+    const stopped = new Error("kora_sql stopped while waiting for the database");
+    stopped.code = "KORA_SQL_STOPPING";
     throw stopped;
   }
   api.pools = pools;
@@ -23837,7 +23837,7 @@ async function boot() {
   });
   api._ready = true;
   api._readyResolve(true);
-  emit("qbsql:internal:ready", api.version());
+  emit("kora_sql:internal:ready", api.version());
   log.info("index", "ready.");
 }
 __name(boot, "boot");
@@ -23848,7 +23848,7 @@ if (!registerExport) {
   register(api, registerExport);
 }
 boot().catch((err) => {
-  if (err.code === "QBSQL_STOPPING") return;
+  if (err.code === "KORA_SQL_STOPPING") return;
   log.error("index", `FAILED TO START: ${err.message}`);
   log.error("index", err.stack || "");
   api._ready = false;

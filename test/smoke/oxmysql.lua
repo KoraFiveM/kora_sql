@@ -25,7 +25,7 @@ end)
 h.test('deprecated execute/fetch aliases retain query result semantics', function()
     handle.setInvokingResource('legacy-resource')
     handle.getExport('oxmysql', 'execute')('UPDATE players SET name = ?', { 'A' }, function() end)
-    h.assertTrue(handle.lastCall('query') ~= nil, 'execute must route to query, not qbsql execute OkPacket adapter')
+    h.assertTrue(handle.lastCall('query') ~= nil, 'execute must route to query, not kora_sql execute OkPacket adapter')
 
     handle.getExport('oxmysql', 'fetch')('SELECT 1', {}, function() end)
     h.assertTrue(handle.lastCall('query') ~= nil, 'fetch must route to query')
@@ -50,11 +50,11 @@ h.test('query forwards the invoking resource as the trailing argument', function
     h.assertEqual(resource, 'some-other-resource', 'invoking resource not forwarded')
 end)
 
-h.test('isReady forwards the qbsql readiness result', function()
+h.test('isReady forwards the kora_sql readiness result', function()
     exports.kora_sql.isReady = function() return true end
 
     local isReady = handle.getExport('oxmysql', 'isReady')
-    h.assertTrue(isReady(), 'oxmysql:isReady should return qbsql readiness')
+    h.assertTrue(isReady(), 'oxmysql:isReady should return kora_sql readiness')
 end)
 
 h.test('params default to an empty table when omitted-as-nil', function()

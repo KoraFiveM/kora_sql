@@ -55,8 +55,8 @@ const api = {
     isReady() { return this._ready; },
     version() {
         return this.pools
-            ? { server: this.pools.version.raw, isMariaDB: this.pools.version.isMariaDB, driver: 'qbsql/1.0.0' }
-            : { server: 'starting', isMariaDB: false, driver: 'qbsql/1.0.0' };
+            ? { server: this.pools.version.raw, isMariaDB: this.pools.version.isMariaDB, driver: 'kora_sql/1.0.0' }
+            : { server: 'starting', isMariaDB: false, driver: 'kora_sql/1.0.0' };
     },
     ready() { return this._readyPromise; },
 
@@ -95,8 +95,8 @@ async function boot() {
     });
     if (stopping) {
         await Promise.allSettled(poolBuilder.all(pools).map((pool) => pool.end()));
-        const stopped = new Error('qbsql stopped while waiting for the database');
-        stopped.code = 'QBSQL_STOPPING';
+        const stopped = new Error('kora_sql stopped while waiting for the database');
+        stopped.code = 'KORA_SQL_STOPPING';
         throw stopped;
     }
     api.pools = pools;
@@ -134,7 +134,7 @@ async function boot() {
     api._ready = true;
     api._readyResolve(true);
 
-    emit('qbsql:internal:ready', api.version());
+    emit('kora_sql:internal:ready', api.version());
     log.info('index', 'ready.');
 }
 
@@ -149,7 +149,7 @@ if (!registerExport) {
 }
 
 boot().catch((err) => {
-    if (err.code === 'QBSQL_STOPPING') return;
+    if (err.code === 'KORA_SQL_STOPPING') return;
     log.error('index', `FAILED TO START: ${err.message}`);
     log.error('index', err.stack || '');
     api._ready = false;

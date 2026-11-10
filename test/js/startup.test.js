@@ -56,7 +56,7 @@ test('connection charset accepts a bare charset or a full collation name', () =>
     assert.equal(connectionCollation('utf8mb4_unicode_ci'), 'utf8mb4_unicode_ci');
 });
 
-test('the renamed statement cache convar still honours its qbsql_ spelling', () => {
+test('the renamed statement cache convar still honours its kora_sql_ spelling', () => {
     const cfgLoader = require('../../server/js/config');
     const load = (convars) => {
         globalThis.GetConvar = (name, def) => (name in convars ? convars[name] : def);
@@ -64,7 +64,7 @@ test('the renamed statement cache convar still honours its qbsql_ spelling', () 
     };
     const dsn = 'mysql://u:p@localhost/db?charset=utf8mb4';
     assert.equal(load({ mysql_connection_string: dsn }).statementCache, 256);
-    assert.equal(load({ mysql_connection_string: dsn, qbsql_statement_cache: '128' }).statementCache, 128);
-    assert.equal(load({ mysql_connection_string: dsn, qbsql_statement_cache: '128', kora_sql_statement_cache: '64' }).statementCache, 64);
+    assert.equal(load({ mysql_connection_string: dsn, kora_sql_statement_cache: '128' }).statementCache, 128);
+    assert.equal(load({ mysql_connection_string: dsn, kora_sql_statement_cache: '128', kora_sql_statement_cache: '64' }).statementCache, 64);
     assert.equal(load({ mysql_connection_string: dsn }).defaultCollate, 'utf8mb4_unicode_ci');
 });

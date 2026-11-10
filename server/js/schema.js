@@ -15,23 +15,23 @@ const q = (name) => '`' + name + '`';
 const list = (names) => names.map(q).join(', ');
 
 function assertIdent(value, what) {
-    if (typeof value !== 'string' || !IDENT.test(value)) throw new Error(`qbsql schema: invalid ${what} '${value}'`);
+    if (typeof value !== 'string' || !IDENT.test(value)) throw new Error(`kora_sql schema: invalid ${what} '${value}'`);
 }
 
 function assertExpression(value, what) {
-    if (typeof value !== 'string' || value.trim() === '' || EXPRESSION_BANNED.test(value)) throw new Error(`qbsql schema: invalid ${what}`);
+    if (typeof value !== 'string' || value.trim() === '' || EXPRESSION_BANNED.test(value)) throw new Error(`kora_sql schema: invalid ${what}`);
 }
 
 function assertNames(value, what) {
-    if (!Array.isArray(value) || value.length === 0) throw new Error(`qbsql schema: ${what} must be a non-empty list`);
+    if (!Array.isArray(value) || value.length === 0) throw new Error(`kora_sql schema: ${what} must be a non-empty list`);
     value.forEach((name) => assertIdent(name, what));
 }
 
 function validateSpec(input, defaults = {}) {
-    if (!input || typeof input !== 'object') throw new Error('qbsql schema: spec must be a table');
+    if (!input || typeof input !== 'object') throw new Error('kora_sql schema: spec must be a table');
     assertIdent(input.name, 'table name');
     if (!Array.isArray(input.columns) || input.columns.length === 0) {
-        throw new Error(`qbsql schema: '${input.name}' needs at least one column`);
+        throw new Error(`kora_sql schema: '${input.name}' needs at least one column`);
     }
 
     const spec = {
@@ -51,7 +51,7 @@ function validateSpec(input, defaults = {}) {
     };
     assertIdent(spec.engine, 'engine');
     assertIdent(spec.charset, 'charset');
-    if (spec.collate !== null && !COLLATION.test(spec.collate)) throw new Error(`qbsql schema: invalid collation '${spec.collate}'`);
+    if (spec.collate !== null && !COLLATION.test(spec.collate)) throw new Error(`kora_sql schema: invalid collation '${spec.collate}'`);
     const createCollate = typeof defaults.createCollate === 'string' ? defaults.createCollate : '';
     if (spec.collate === null && COLLATION.test(createCollate)
         && createCollate.toLowerCase().startsWith(spec.charset.toLowerCase() + '_')) {
@@ -61,63 +61,63 @@ function validateSpec(input, defaults = {}) {
     const seen = new Set();
     for (const col of input.columns) {
         assertIdent(col && col.name, 'column name');
-        if (seen.has(col.name)) throw new Error(`qbsql schema: duplicate column '${col.name}' in '${spec.name}'`);
+        if (seen.has(col.name)) throw new Error(`kora_sql schema: duplicate column '${col.name}' in '${spec.name}'`);
         seen.add(col.name);
         if (typeof col.type !== 'string' || !BASE_TYPE.test(col.type)) {
-            throw new Error(`qbsql schema: unsupported type '${col.type}' for ${spec.name}.${col.name}`);
+            throw new Error(`kora_sql schema: unsupported type '${col.type}' for ${spec.name}.${col.name}`);
         }
         const base = col.type.toLowerCase();
         if ((base === 'enum' || base === 'set')
             && (!Array.isArray(col.values) || col.values.length === 0 || col.values.some((v) => typeof v !== 'string'))) {
-            throw new Error(`qbsql schema: ${spec.name}.${col.name} needs a 'values' list`);
+            throw new Error(`kora_sql schema: ${spec.name}.${col.name} needs a 'values' list`);
         }
-        if (col.collate !== undefined && !COLLATION.test(col.collate)) throw new Error(`qbsql schema: invalid collation for ${spec.name}.${col.name}`);
+        if (col.collate !== undefined && !COLLATION.test(col.collate)) throw new Error(`kora_sql schema: invalid collation for ${spec.name}.${col.name}`);
         if (col.on_update !== undefined && !RAW_DEFAULT.test(String(col.on_update))) {
-            throw new Error(`qbsql schema: unsupported on_update for ${spec.name}.${col.name}`);
+            throw new Error(`kora_sql schema: unsupported on_update for ${spec.name}.${col.name}`);
         }
         if (col.default && typeof col.default === 'object' && !RAW_DEFAULT.test(String(col.default.raw))) {
-            throw new Error(`qbsql schema: unsupported raw default for ${spec.name}.${col.name}`);
+            throw new Error(`kora_sql schema: unsupported raw default for ${spec.name}.${col.name}`);
         }
         if (col.generated !== undefined) {
             assertExpression(col.generated.expr, `generated expression for ${spec.name}.${col.name}`);
-            if (col.default !== undefined || col.auto_increment) throw new Error(`qbsql schema: generated column ${spec.name}.${col.name} cannot have a default or auto_increment`);
+            if (col.default !== undefined || col.auto_increment) throw new Error(`kora_sql schema: generated column ${spec.name}.${col.name} cannot have a default or auto_increment`);
         }
         if (col.after !== undefined) assertIdent(col.after, 'after column');
-        if (col.comment !== undefined && typeof col.comment !== 'string') throw new Error(`qbsql schema: invalid comment for ${spec.name}.${col.name}`);
+        if (col.comment !== undefined && typeof col.comment !== 'string') throw new Error(`kora_sql schema: invalid comment for ${spec.name}.${col.name}`);
         spec.columns.push(col);
     }
 
-    if (spec.extend && (spec.primary || spec.seed)) throw new Error(`qbsql schema: extend table '${spec.name}' cannot declare a primary key or seed rows`);
-    if (spec.comment !== undefined && typeof spec.comment !== 'string') throw new Error(`qbsql schema: invalid comment for '${spec.name}'`);
+    if (spec.extend && (spec.primary || spec.seed)) throw new Error(`kora_sql schema: extend table '${spec.name}' cannot declare a primary key or seed rows`);
+    if (spec.comment !== undefined && typeof spec.comment !== 'string') throw new Error(`kora_sql schema: invalid comment for '${spec.name}'`);
     for (const check of spec.checks) {
         assertIdent(check.name, 'check name');
         assertExpression(check.expr, `check expression '${check.name}'`);
     }
     if (spec.primary) {
         assertNames(spec.primary, 'primary key column');
-        spec.primary.forEach((c) => { if (!seen.has(c)) throw new Error(`qbsql schema: primary key column '${c}' is not in '${spec.name}'`); });
+        spec.primary.forEach((c) => { if (!seen.has(c)) throw new Error(`kora_sql schema: primary key column '${c}' is not in '${spec.name}'`); });
     }
     for (const idx of spec.indexes) {
         assertIdent(idx.name, 'index name');
         assertNames(idx.columns, 'index column');
-        idx.columns.forEach((c) => { if (!seen.has(c)) throw new Error(`qbsql schema: index '${idx.name}' column '${c}' is not in '${spec.name}'`); });
+        idx.columns.forEach((c) => { if (!seen.has(c)) throw new Error(`kora_sql schema: index '${idx.name}' column '${c}' is not in '${spec.name}'`); });
     }
     for (const fk of spec.foreign) {
         assertIdent(fk.name, 'foreign key name');
         assertIdent(fk.ref_table, 'foreign key table');
         assertNames(fk.columns, 'foreign key column');
         assertNames(fk.ref_columns, 'foreign key reference column');
-        fk.columns.forEach((c) => { if (!seen.has(c)) throw new Error(`qbsql schema: foreign key '${fk.name}' column '${c}' is not in '${spec.name}'`); });
+        fk.columns.forEach((c) => { if (!seen.has(c)) throw new Error(`kora_sql schema: foreign key '${fk.name}' column '${c}' is not in '${spec.name}'`); });
         for (const key of ['on_delete', 'on_update']) {
             if (fk[key] !== undefined && !FK_ACTIONS.has(String(fk[key]).toUpperCase())) {
-                throw new Error(`qbsql schema: invalid ${key} for foreign key '${fk.name}'`);
+                throw new Error(`kora_sql schema: invalid ${key} for foreign key '${fk.name}'`);
             }
         }
     }
     if (spec.seed) {
-        if (!Array.isArray(spec.seed.rows)) throw new Error(`qbsql schema: seed.rows for '${spec.name}' must be a list`);
+        if (!Array.isArray(spec.seed.rows)) throw new Error(`kora_sql schema: seed.rows for '${spec.name}' must be a list`);
         spec.seed.rows.forEach((row) => Object.keys(row).forEach((c) => {
-            if (!seen.has(c)) throw new Error(`qbsql schema: seed column '${c}' is not in '${spec.name}'`);
+            if (!seen.has(c)) throw new Error(`kora_sql schema: seed column '${c}' is not in '${spec.name}'`);
         }));
     }
     return spec;
@@ -335,7 +335,7 @@ function buildSeed(spec) {
     if (spec.seed.update) {
         const key = new Set(spec.seed.key || spec.primary || []);
         const updatable = columns.filter((c) => !key.has(c));
-        if (updatable.length === 0) throw new Error(`qbsql schema: seed.update on '${spec.name}' has no non-key columns`);
+        if (updatable.length === 0) throw new Error(`kora_sql schema: seed.update on '${spec.name}' has no non-key columns`);
         sql = `INSERT INTO ${q(spec.name)} (${list(columns)}) VALUES ${placeholders.join(', ')} ON DUPLICATE KEY UPDATE ${updatable.map((c) => `${q(c)} = VALUES(${q(c)})`).join(', ')}`;
     } else {
         sql = `INSERT IGNORE INTO ${q(spec.name)} (${list(columns)}) VALUES ${placeholders.join(', ')}`;
@@ -423,7 +423,7 @@ class SchemaManager {
             const actual = await this._inspect(spec.name);
 
             if (!actual && spec.extend) {
-                throw new Error(`qbsql schema: table '${spec.name}' does not exist, so ${resource || 'the caller'} cannot extend it`);
+                throw new Error(`kora_sql schema: table '${spec.name}' does not exist, so ${resource || 'the caller'} cannot extend it`);
             }
             if (!actual) {
                 await this.pools.write.query(ddl(buildCreate(spec)));
@@ -482,7 +482,7 @@ class SchemaManager {
 
     async awaitTables(names, timeoutMs, resource) {
         if (!Array.isArray(names) || names.length === 0 || names.some((n) => typeof n !== 'string' || !IDENT.test(n))) {
-            throw new Error('qbsql schema: awaitTables expects a list of table names');
+            throw new Error('kora_sql schema: awaitTables expects a list of table names');
         }
         const deadline = Date.now() + (Number(timeoutMs) > 0 ? Number(timeoutMs) : 60000);
         const unique = [...new Set(names)];
@@ -498,7 +498,7 @@ class SchemaManager {
     }
 
     async ensureTables(specs, resource) {
-        if (!Array.isArray(specs)) throw new Error('qbsql schema: ensureTables expects a list of table specs');
+        if (!Array.isArray(specs)) throw new Error('kora_sql schema: ensureTables expects a list of table specs');
         const reports = [];
         for (const spec of specs) reports.push(await this.ensureTable(spec, resource));
         return reports;

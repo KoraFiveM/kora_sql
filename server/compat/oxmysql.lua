@@ -19,7 +19,7 @@ end
 local function warnSyncOnce(resource)
     if not Config.compat.warnOnSync or warnedSync[resource] then return end
     warnedSync[resource] = true
-    print(('^3[qbsql:oxmysql-bridge]^7 \'%s\' is using the blocking Sync SQL API, which stalls the '
+    print(('^3[kora_sql:oxmysql-bridge]^7 \'%s\' is using the blocking Sync SQL API, which stalls the '
         .. 'server thread. Migrate to Kora.sql.* or the callback form.'):format(resource))
 end
 
@@ -50,7 +50,7 @@ local function syncCall(jsName)
         end, resource)
         local ok, res = pcall(Citizen.Await, p)
         if not ok then
-            print(('^1[qbsql:oxmysql-bridge]^7 sync %s failed: %s'):format(jsName, tostring(res)))
+            print(('^1[kora_sql:oxmysql-bridge]^7 sync %s failed: %s'):format(jsName, tostring(res)))
             return nil
         end
         return res
@@ -75,7 +75,7 @@ end
 
 local function multipleStatementsAllowed()
     if Config.compat.allowMultipleStatements then return true end
-    local raw = GetConvar('qbsql_allow_multiple_statements', '')
+    local raw = GetConvar('kora_sql_allow_multiple_statements', '')
     return raw == 'true' or raw == '1' or raw == 'yes'
 end
 
@@ -83,8 +83,8 @@ local function guarded(fn)
     return function(query, params, cb)
         if not multipleStatementsAllowed() and looksMultiStatement(query) then
             local resource = GetInvokingResource() or GetCurrentResourceName()
-            print(('^1[qbsql:oxmysql-bridge]^7 multi-statement query refused from \'%s\' -- split it, or set '
-                .. '`qbsql_allow_multiple_statements true` and accept the injection amplification. SQL: %s')
+            print(('^1[kora_sql:oxmysql-bridge]^7 multi-statement query refused from \'%s\' -- split it, or set '
+                .. '`kora_sql_allow_multiple_statements true` and accept the injection amplification. SQL: %s')
                 :format(resource, tostring(query):sub(1, 120)))
             if cb == nil and isCallable(params) then cb = params end
             if isCallable(cb) then cb(nil, 'multi-statement refused') end

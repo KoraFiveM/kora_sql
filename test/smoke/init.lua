@@ -23,9 +23,9 @@ harness.test('checked transaction and recovery wrappers preserve operation conte
     call = net.lastCall('awaitCheckedOperation')
     harness.assertEqual(call.args[1], 'claim')
     harness.assertEqual(call.args[2], 'terms')
-    Kora.sql.awaitCheckedOperations('qbhousing:')
+    Kora.sql.awaitCheckedOperations('kora_housing:')
     call = net.lastCall('awaitCheckedOperations')
-    harness.assertEqual(call.args[1], 'qbhousing:')
+    harness.assertEqual(call.args[1], 'kora_housing:')
 end)
 
 harness.test('ensureTable and ensureTables pass the spec and calling resource to the driver', function()

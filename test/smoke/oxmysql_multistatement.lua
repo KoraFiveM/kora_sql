@@ -26,14 +26,14 @@ end)
 
 h.test('truthy values true/1/yes allow multi-statement', function()
     for _, v in ipairs({ 'true', '1', 'yes' }) do
-        convars = { qbsql_allow_multiple_statements = v }
+        convars = { kora_sql_allow_multiple_statements = v }
         h.assertFalse(refused(), v .. ' should allow')
     end
 end)
 
 h.test('false/0/no/empty/other values keep it refused (matches JS parsing)', function()
     for _, v in ipairs({ 'false', '0', 'no', '', 'TRUE', 'on' }) do
-        convars = { qbsql_allow_multiple_statements = v }
+        convars = { kora_sql_allow_multiple_statements = v }
         h.assertTrue(refused(), v .. ' should refuse')
     end
 end)

@@ -34,7 +34,7 @@ h.test('stored queries resolve through Async and Sync aliases', function()
     h.assertEqual(call.args[1], 'SELECT ?')
 end)
 
-h.test('ready await and startTransaction forward to qbsql', function()
+h.test('ready await and startTransaction forward to kora_sql', function()
     h.assertTrue(MySQL.ready.await())
     MySQL.startTransaction(function() return true end)
     h.assertTrue(handle.lastCall('startTransaction') ~= nil)

@@ -33,7 +33,7 @@ test('S6: a call waiting for a busy pool fails after the acquire timeout', async
     t.mock.timers.tick(999);
     await Promise.resolve();
     t.mock.timers.tick(1);
-    await assert.rejects(pending, (err) => err.code === 'QBSQL_ACQUIRE_TIMEOUT' && /within 1000ms/.test(err.message));
+    await assert.rejects(pending, (err) => err.code === 'KORA_SQL_ACQUIRE_TIMEOUT' && /within 1000ms/.test(err.message));
 
     pool.waiting.shift()(conn('late'));
     await Promise.resolve();

@@ -30,7 +30,7 @@ function build(table, conflictKey, columns, rows, opts) {
     const pad = opts && opts.pad;
 
     if (pad && mode === 'accumulate') {
-        throw new Error('qbsql/batch: bucket padding is not sound in accumulate mode -- pass pad:false.');
+        throw new Error('kora_sql/batch: bucket padding is not sound in accumulate mode -- pass pad:false.');
     }
 
     const keyCols = Array.isArray(conflictKey) ? conflictKey : [conflictKey];
@@ -67,7 +67,7 @@ function buildUpdate(table, conflictKey, columns, rows, opts) {
     const mode = (opts && opts.mode) || 'assign';
     const pad = opts && opts.pad;
     if (pad && mode === 'accumulate') {
-        throw new Error('qbsql/batch: bucket padding is not sound in accumulate mode -- pass pad:false.');
+        throw new Error('kora_sql/batch: bucket padding is not sound in accumulate mode -- pass pad:false.');
     }
 
     const keyCols = Array.isArray(conflictKey) ? conflictKey : [conflictKey];

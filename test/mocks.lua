@@ -42,8 +42,8 @@ function M.install()
         end,
     }
 
-    local qbsql = {}
-    setmetatable(qbsql, {
+    local kora_sql = {}
+    setmetatable(kora_sql, {
         __index = function(_, name)
             return function(_self, ...)
                 local args = { ... }
@@ -55,7 +55,7 @@ function M.install()
             end
         end,
     })
-    _G.exports = { kora_sql = qbsql }
+    _G.exports = { kora_sql = kora_sql }
 
     return {
         providedExports = providedExports,

@@ -39,8 +39,8 @@ async function connectWithRetry(build, cfg, options = {}) {
             onRetry(err, attempt, retryInterval);
             await delay(retryInterval);
             if (shouldStop()) {
-                const stopped = new Error('qbsql stopped while waiting for the database');
-                stopped.code = 'QBSQL_STOPPING';
+                const stopped = new Error('kora_sql stopped while waiting for the database');
+                stopped.code = 'KORA_SQL_STOPPING';
                 throw stopped;
             }
         }

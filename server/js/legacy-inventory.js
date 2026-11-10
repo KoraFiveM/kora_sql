@@ -28,7 +28,7 @@ function createLegacyInventoryBridge({ getState, request, onStop }) {
                 pending.delete(finish);
                 if (error !== undefined && error !== null) return reject(new Error(String(error)));
                 if (!Number.isSafeInteger(affectedRows) || affectedRows < 0) {
-                    return reject(new Error('qbinventory returned an invalid police trash delete count'));
+                    return reject(new Error('kora_inventory returned an invalid police trash delete count'));
                 }
                 resolve({ fieldCount: 0, affectedRows, insertId: 0, info: '', serverStatus: 2,
                     warningStatus: 0, changedRows: 0 });
