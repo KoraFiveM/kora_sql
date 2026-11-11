@@ -4,7 +4,7 @@ const { escape } = require('mysql2');
 const log = require('./logger');
 const { IDENT } = require('./ident');
 
-const NULL_SENTINEL = '\u0000qbsql:null\u0000';
+const NULL_SENTINEL = '\u0000kora_sql:null\u0000';
 const BASE_TYPE = /^(?:(?:tiny|small|medium|big)?int(?:\(\d{1,2}\))?|integer|decimal\(\d{1,2}(?:,\d{1,2})?\)|numeric\(\d{1,2}(?:,\d{1,2})?\)|float|double|(?:var)?char\(\d{1,5}\)|(?:var)?binary\(\d{1,5}\)|tinytext|text|mediumtext|longtext|tinyblob|blob|mediumblob|longblob|json|date|time(?:\(\d\))?|datetime(?:\(\d\))?|timestamp(?:\(\d\))?|year|boolean|bool|enum|set)$/i;
 const RAW_DEFAULT = /^(?:CURRENT_TIMESTAMP|NOW|LOCALTIMESTAMP)(?:\(\d?\))?$/i;
 const EXPRESSION_BANNED = /;|--|\/\*|\*\//;

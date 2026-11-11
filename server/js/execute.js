@@ -4,7 +4,7 @@ const { isUnpreparableError } = require('./statements');
 const log = require('./logger');
 const { typeCast, typeCastExecute } = require('./typecast');
 
-const NULL_SENTINEL = '\u0000qbsql:null\u0000';
+const NULL_SENTINEL = '\u0000kora_sql:null\u0000';
 
 function normalizeParams(params) {
     if (params === null || params === undefined) return [];
