@@ -1,0 +1,4 @@
+theme: jekyll-theme-cayman
+title: kora_sql
+description: "High-throughput MySQL driver for FiveM with write coalescing and oxmysql/mysql-async compatibility"
+show_downloads: false

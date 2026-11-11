@@ -1,0 +1,115 @@
+package.path = package.path .. ';./?.lua'
+local h = dofile('test/harness.lua')
+local mocks = dofile('test/mocks.lua')
+
+local handle = mocks.install()
+GetConvar = GetConvar or function(_, def) return def end
+
+_G.Config = { compat = { oxmysql = true, warnOnSync = true, allowMultipleStatements = false } }
+
+dofile('server/compat/oxmysql.lua')
+
+h.test('registers the core oxmysql export surface', function()
+    for _, name in ipairs({
+        'execute', 'fetch', 'query', 'scalar', 'single', 'insert', 'update', 'prepare', 'rawExecute',
+        'executeSync', 'fetchSync', 'querySync', 'scalarSync', 'singleSync', 'insertSync', 'updateSync',
+        'prepareSync', 'rawExecuteSync', 'transaction', 'transactionSync', 'store', 'storeSync',
+        'isReady', 'isReadySync', 'awaitConnection', 'awaitConnectionSync',
+        'startTransaction', 'startTransactionSync',
+    }) do
+        h.assertTrue(handle.getExport('oxmysql', name) ~= nil,
+            'missing export oxmysql:' .. name)
+    end
+end)
+
+h.test('deprecated execute/fetch aliases retain query result semantics', function()
+    handle.setInvokingResource('legacy-resource')
+    handle.getExport('oxmysql', 'execute')('UPDATE players SET name = ?', { 'A' }, function() end)
+    h.assertTrue(handle.lastCall('query') ~= nil, 'execute must route to query, not kora_sql execute OkPacket adapter')
+
+    handle.getExport('oxmysql', 'fetch')('SELECT 1', {}, function() end)
+    h.assertTrue(handle.lastCall('query') ~= nil, 'fetch must route to query')
+end)
+
+h.test('callback may be supplied as the second argument', function()
+    local seen
+    handle.getExport('oxmysql', 'query')('SELECT 1', function(result) seen = result end)
+    h.assertTrue(seen ~= nil, 'second-argument callback should be detected')
+    local call = handle.lastCall('query')
+    h.assertEqual(type(call.args[2]), 'table')
+end)
+
+h.test('query forwards the invoking resource as the trailing argument', function()
+    handle.setInvokingResource('some-other-resource')
+    local query = handle.getExport('oxmysql', 'query')
+    query('SELECT 1', { 42 }, function() end)
+
+    local call = handle.lastCall('query')
+    h.assertTrue(call ~= nil, 'expected a query call to reach exports.kora_sql')
+    local resource = call.args[#call.args]
+    h.assertEqual(resource, 'some-other-resource', 'invoking resource not forwarded')
+end)
+
+h.test('isReady forwards the kora_sql readiness result', function()
+    exports.kora_sql.isReady = function() return true end
+
+    local isReady = handle.getExport('oxmysql', 'isReady')
+    h.assertTrue(isReady(), 'oxmysql:isReady should return kora_sql readiness')
+end)
+
+h.test('params default to an empty table when omitted-as-nil', function()
+    handle.setInvokingResource('r')
+    local query = handle.getExport('oxmysql', 'query')
+    query('SELECT 1', nil, function() end)
+    local call = handle.lastCall('query')
+    h.assertEqual(type(call.args[2]), 'table', 'params should be normalised to a table')
+end)
+
+h.test('store matches current oxmysql by returning the SQL text', function()
+    local callbackValue
+    local store = handle.getExport('oxmysql', 'store')
+    local result = store('SELECT 42', function(value) callbackValue = value end)
+    h.assertEqual(result, 'SELECT 42')
+    h.assertEqual(callbackValue, 'SELECT 42')
+end)
+
+h.test('multi-statement queries are refused (callback gets an error)', function()
+    handle.setInvokingResource('r')
+    local query = handle.getExport('oxmysql', 'query')
+    local errSeen = nil
+    query('SELECT 1; DROP TABLE players', {}, function(_, err) errSeen = err end)
+    h.assertTrue(errSeen ~= nil, 'multi-statement query should have been refused')
+end)
+
+h.test('a trailing semicolon alone is NOT treated as multi-statement', function()
+    handle.setInvokingResource('r')
+    local query = handle.getExport('oxmysql', 'query')
+    local errSeen = 'sentinel'
+    query('SELECT 1;   ', {}, function(_, err) errSeen = err end)
+    h.assertTrue(errSeen == nil, 'a bare trailing semicolon must not be refused')
+end)
+
+h.test('oxmysql bridge calls the ox* typeCast variants, native names untouched', function()
+    handle.setInvokingResource('r')
+    local ex = function(n) return handle.getExport('oxmysql', n) end
+    for lua, js in pairs({ query = 'oxQuery', single = 'oxSingle', scalar = 'oxScalar',
+        insert = 'oxInsert', update = 'oxUpdate', prepare = 'oxPrepare' }) do
+        ex(lua)('SELECT 1', {}, function() end)
+        h.assertTrue(handle.lastCallExact(js) ~= nil, lua .. ' must call exports.kora_sql:' .. js)
+        ex(lua .. 'Sync')('SELECT 1', {})
+    end
+    ex('rawExecute')('SELECT 1', {}, function() end)
+    h.assertTrue(handle.lastCallExact('oxRawExecute') ~= nil, 'rawExecute -> oxRawExecute')
+    h.assertTrue(handle.lastCallExact('scalar') == nil, 'native scalar must not be used by the bridge')
+end)
+
+h.test('query without a callback leaves no nil hole before the invoking resource', function()
+    handle.setInvokingResource('no-cb-resource')
+    handle.getExport('oxmysql', 'query')('SELECT 1', { 1 })
+    local call = handle.lastCallExact('oxQuery')
+    h.assertEqual(#call.args, 3, 'args are exactly (sql, params, resource)')
+    h.assertEqual(call.args[3], 'no-cb-resource')
+    h.assertEqual(type(call.args[2]), 'table')
+end)
+
+h.report('oxmysql-compat')

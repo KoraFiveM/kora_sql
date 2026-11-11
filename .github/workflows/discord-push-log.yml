@@ -1,0 +1,25 @@
+name: Discord push log
+
+on:
+  push:
+
+permissions:
+  contents: read
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send push log to Discord
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          branch="${GITHUB_REF#refs/heads/}"
+          commits="$(jq -r '.commits[:10][]? | "• \(.id[0:7]) — \(.message | split("\\n")[0])"' "$GITHUB_EVENT_PATH")"
+          if [ -z "$commits" ]; then commits="• Commit details were not included in the event"; fi
+          content="$(printf '**Push received**\nRepository: `%s`\nBranch: `%s`\nPushed by: %s\nCompare: %s\n%s' "$GITHUB_REPOSITORY" "$branch" "$GITHUB_ACTOR" "${{ github.event.compare }}" "$commits")"
+          payload="$(jq -n --arg content "${content:0:1900}" '{content: $content, allowed_mentions: {parse: []}}')"
+          curl --fail-with-body --retry 3 --retry-delay 2 \
+            -H 'Content-Type: application/json' \
+            -d "$payload" \
+            "$DISCORD_WEBHOOK_URL"

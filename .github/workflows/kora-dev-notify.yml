@@ -1,0 +1,27 @@
+# Copy to .github/workflows/kora-dev-notify.yml in each watched resource repo.
+name: Notify shared Kora dev
+on:
+  push:
+    branches: [dev]
+permissions:
+  contents: read
+jobs:
+  notify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        id: app
+        with:
+          app-id: ${{ secrets.KORA_NOTIFY_APP_ID }}
+          private-key: ${{ secrets.KORA_NOTIFY_APP_PRIVATE_KEY }}
+          owner: KoraFiveM
+          repositories: kora_docker_dev
+          permission-actions: write
+      - name: Request reconciliation
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          gh api --method POST repos/KoraFiveM/kora_docker_dev/actions/workflows/gitops-reconcile.yml/dispatches --input - <<'JSON'
+          {"ref":"main","inputs":{"operation":"reconcile"}}
+          JSON
