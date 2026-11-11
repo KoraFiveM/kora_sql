@@ -11,7 +11,7 @@ function invalid(reason, message) {
     return err;
 }
 
-const NULL_SENTINEL = '\u0000qbsql:null\u0000';
+const NULL_SENTINEL = '\u0000kora_sql:null\u0000';
 function normalizeWriteParams(params) {
     return Array.from(params, (value) =>
         value === undefined || value === NULL_SENTINEL ? null : value);

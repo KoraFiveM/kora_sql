@@ -301,7 +301,7 @@ test('queued upserts turn missing values and the public NULL sentinel into SQL N
 
     q.enqueue('kora_multijob_jobs', 'citizenid', {
         pk: 'ABC',
-        cols: { jobs: undefined, note: '\u0000qbsql:null\u0000' },
+        cols: { jobs: undefined, note: '\u0000kora_sql:null\u0000' },
     }, {});
     await q.flush();
 
