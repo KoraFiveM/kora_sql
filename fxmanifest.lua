@@ -4,7 +4,7 @@ lua54 'yes'
 
 name 'kora_sql'
 author 'Jamie'
-version '0.1.0'
+version '0.2.0'
 description 'High-throughput MySQL driver for FiveM with write coalescing and oxmysql/mysql-async compatibility'
 
 dependency 'kora_lib'
