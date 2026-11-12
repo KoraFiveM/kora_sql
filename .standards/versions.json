@@ -1,0 +1,9 @@
+{
+  "standardsRevision": "2026-11-12.2",
+  "stylua": "2.6.0",
+  "luaLS": "3.19.2",
+  "fiveMDefinitions": "ef5f08e5e1d4a176586a5befbe0a9ff8400c58fc",
+  "fiveMDefinitionsRepository": "https://github.com/overextended/fivem-lls-addon",
+  "project": "Kora Framework",
+  "copyright": "Copyright © 2026 Kora Framework"
+}

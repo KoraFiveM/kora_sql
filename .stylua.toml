@@ -1,0 +1,11 @@
+# Kora Framework
+# Copyright © 2026 Kora Framework
+# Kora Framework standards 2026-11-12.2
+syntax = "CfxLua"
+column_width = 120
+line_endings = "Unix"
+indent_type = "Spaces"
+indent_width = 4
+quote_style = "AutoPreferSingle"
+call_parentheses = "Always"
+collapse_simple_statement = "Never"

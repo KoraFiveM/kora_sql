@@ -1,0 +1,58 @@
+{
+  "resource": "kora_sql",
+  "standardsRevision": "2026-11-12.2",
+  "realms": {
+    "client": [],
+    "server": [
+      "config.lua",
+      "init.lua",
+      "lib/MySQL.lua",
+      "server/commands.lua",
+      "server/compat/ghmattimysql.lua",
+      "server/compat/mysql-async.lua",
+      "server/compat/oxmysql.lua",
+      "server/ready.lua",
+      "stubs/mysql-async/lib/MySQL.lua",
+      "stubs/oxmysql/lib/MySQL.lua"
+    ],
+    "shared": [],
+    "manifest": [
+      "fxmanifest.lua",
+      "stubs/mysql-async/fxmanifest.lua",
+      "stubs/oxmysql/fxmanifest.lua"
+    ],
+    "test": [
+      "test/harness.lua",
+      "test/mocks.lua",
+      "test/smoke/init.lua",
+      "test/smoke/mysql_async.lua",
+      "test/smoke/mysql_lib.lua",
+      "test/smoke/oxmysql.lua",
+      "test/smoke/oxmysql_multistatement.lua",
+      "test/smoke/oxmysql_placeholder.lua"
+    ]
+  },
+  "exclude": [
+    ".git/*",
+    ".github/*",
+    ".standards/*",
+    "node_modules/*",
+    "**/node_modules/*",
+    "vendor/*",
+    "**/vendor/*",
+    "web/*",
+    "ui/*",
+    "html/*",
+    "dist/*",
+    "artifacts/*",
+    "runtime/*",
+    "txData/*",
+    "storage/*",
+    "stream/*",
+    "docs/*",
+    "__pycache__/*",
+    "modules/lookup/data/*"
+  ],
+  "project": "Kora Framework",
+  "copyright": "Copyright © 2026 Kora Framework"
+}
