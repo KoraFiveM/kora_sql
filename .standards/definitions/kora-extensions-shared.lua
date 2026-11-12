@@ -1,4 +1,5 @@
 ---@meta
+-- Kora Framework integration. Copyright © 2026 Kora Framework.
 -- Annotation-only consumer API from kora_core/init.lua; no runtime code is loaded.
 ---@class KoraSharedRegistry
 ---@field get fun(name: string, key: string): table|nil

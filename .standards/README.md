@@ -1,7 +1,7 @@
-# Kora Lua tooling
+# Kora Framework Lua tooling
 
-Standards revision: **2026-11-12.1**. Canonical policy:
-[Contributing to Kora](https://github.com/KoraFiveM/kora_docker_dev/blob/main/CONTRIBUTING.md).
+Standards revision: **2026-11-12.2**. Canonical policy:
+[Contributing to Kora Framework](https://github.com/KoraFiveM/kora_docker_dev/blob/main/CONTRIBUTING.md).
 In a resource checkout, read `CONTRIBUTING.md` and local/module `AGENTS.md` first.
 
 ## Install once
@@ -73,14 +73,14 @@ mock fidelity. Explicit `IsDuplicityVersion()` branches in consumer includes may
 need a narrowly documented exception or split implementation; no automatic
 path-insensitive suppression is applied.
 
-Native definitions preserve the upstream client/server/shared markers. Kora fields
+Native definitions preserve the upstream client/server/shared markers. Kora Framework fields
 are filtered by their documented realm annotations; unmarked data types remain
 shared. Dynamic exports are not fully typed, so LuaLS cannot prove every cross-resource
 call or permission check correct. Add accurate annotations to the owning API.
 If resource-specific declarations are needed, add annotation-only Lua files under
 `.standards/definitions-client/`, `definitions-server/`, `definitions-shared/`,
 `definitions-test/` or `definitions-manifest/`; client/server contexts also load
-shared declarations. No catch-all global or Kora field allowlists.
+shared declarations. No catch-all global or Kora Framework field allowlists.
 
 Dependencies, browser output, vendor trees, runtime data, definition snapshots and
 generated lookup bundles are excluded explicitly. Runtime `build/initiate.lua` and
@@ -113,5 +113,9 @@ replace precise declarations with `any` to get a clean check.
 Maintainers can rebuild derived declarations with
 `python3 tools/build_lua_definitions.py --addon /path/to/pinned-addon --kora-types resources/pre/kora_lib/types.lua`
 from the setup checkout. Use the exact addon revision in versions.json and review
-the manually maintained Kora extension declarations against their owning sources.
+the manually maintained Kora Framework extension declarations against their owning sources.
 Keep the upstream MIT notice with every snapshot.
+
+---
+
+Copyright © 2026 Kora Framework.

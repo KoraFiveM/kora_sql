@@ -1,4 +1,5 @@
 ---@meta
+-- Kora Framework integration. Copyright © 2026 Kora Framework.
 -- Annotation-only opt-in Kora.sql surface, reviewed against kora_sql/init.lua.
 -- Availability still requires @kora_sql/init.lua in the consumer's server_scripts.
 ---@alias KoraSqlParams table

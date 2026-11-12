@@ -56,5 +56,7 @@
     "library/runtime/manifest.lua": "07ca764bd1f28b7d8c3df327b7338e3b957046440a98b48a865882bf6000c4d5",
     "library/runtime/msgpack.lua": "ebf41812333e5d29b7cf46f2c1025816a16138e9a023bcf8e2a907cdece38098",
     "library/runtime/promise.lua": "fedb7c9e00c71428062b0d57b48b5764971ec3f54703346678d80eee575313b6"
-  }
+  },
+  "project": "Kora Framework",
+  "copyright": "Copyright © 2026 Kora Framework"
 }

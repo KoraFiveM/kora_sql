@@ -1,4 +1,5 @@
 ---@meta
+-- Kora Framework integration. Copyright © 2026 Kora Framework.
 -- Snapshot of kora_lib/types.lua, filtered by documented realm markers.
 -- Annotation-only kora_lib public API. This file is shipped for LuaLS indexing
 -- but is never loaded as a client, server, or shared runtime script.

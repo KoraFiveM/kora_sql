@@ -1,4 +1,5 @@
 ---@meta
+-- Kora Framework integration. Copyright © 2026 Kora Framework.
 ---@type EntityInterface
 LocalPlayer = {}
 ---@param name string

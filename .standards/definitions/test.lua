@@ -1,3 +1,4 @@
 ---@meta
+-- Kora Framework integration. Copyright © 2026 Kora Framework.
 -- Deliberately no FiveM native declarations: each test must install its own mocks.
 -- Shared promise shape is supplied separately by a local declaration if used.

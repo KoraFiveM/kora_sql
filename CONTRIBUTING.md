@@ -1,12 +1,12 @@
-# Contributing to kora_sql
+# Contributing to kora_sql · Kora Framework
 
-Humans and agents use the [shared Kora contribution standards](https://github.com/KoraFiveM/kora_docker_dev/blob/main/CONTRIBUTING.md)
-(revision **2026-11-12.1**) and the self-contained [local Lua tooling guide](.standards/README.md).
+Humans and agents use the [shared Kora Framework contribution standards](https://github.com/KoraFiveM/kora_docker_dev/blob/main/CONTRIBUTING.md)
+(revision **2026-11-12.2**) and the self-contained [local Lua tooling guide](.standards/README.md).
 Read this resource's README where present, AGENTS.md and relevant module guides first.
 
 For new and relevant changed code: use four spaces, camelCase and StyLua's single-quote/120-column
 style; keep transport handlers thin, server authority explicit, and compatibility adapters
-on the owning implementation. Reuse Kora APIs and validators; place generic mechanics in
+on the owning implementation. Reuse Kora Framework APIs and validators; place generic mechanics in
 kora_lib and domain rules with their owner. Document public APIs, yielding/failure behavior
 and cleanup. Keep unrelated reformats and restructuring separate.
 
@@ -51,3 +51,7 @@ Keep database work server-only, preserve cross-runtime caller attribution and ex
 Changes belong to this resource repository, separately from Docker setup and docs-site
 changes. Shared tooling is a local snapshot; do not introduce a dependency on the setup
 checkout. Keep resource-specific inventory and definitions when refreshing the snapshot.
+
+---
+
+Copyright © 2026 Kora Framework.

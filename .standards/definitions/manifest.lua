@@ -1,4 +1,5 @@
 ---@meta
+-- Kora Framework integration. Copyright © 2026 Kora Framework.
 
 -- Resource manifest directives (fxmanifest.lua / __resource.lua).
 -- These are not globals: plugin.lua binds each field to a local at the top of manifest files only,

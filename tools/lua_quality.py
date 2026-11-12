@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Kora local Lua checks. No downloads, source execution, or implicit formatting."""
+# Kora Framework
+# Copyright © 2026 Kora Framework
+"""Kora Framework local Lua checks. No downloads, source execution, or implicit formatting."""
 import argparse
 import fnmatch
 import json
@@ -11,7 +13,7 @@ import subprocess
 import sys
 import tempfile
 
-REVISION = '2026-11-12.1'
+REVISION = '2026-11-12.2'
 REALMS = ('client', 'server', 'shared', 'manifest', 'test')
 
 
@@ -251,7 +253,7 @@ def main():
             failed |= lint(root, sources, selected, args.realm, luals)
         return failed
     except (ValueError, OSError, KeyError, subprocess.TimeoutExpired) as error:
-        print(f'Lua tooling error: {error}', file=sys.stderr)
+        print(f'Kora Framework Lua tooling error: {error}', file=sys.stderr)
         return 2
 
 

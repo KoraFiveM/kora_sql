@@ -1,4 +1,5 @@
 ---@meta
+-- Kora Framework integration. Copyright © 2026 Kora Framework.
 -- Generated signatures from the pinned fivem-lls-addon; see PROVENANCE.md and LICENSE-FIVEM.
 
 ---@param value number
