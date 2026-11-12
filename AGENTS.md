@@ -114,5 +114,13 @@ data-corruption bug would live, so its exact wire text is pinned byte-for-byte.
 path contains `[test]`, which Node's `--test` treats as a glob character class —
 `run.sh` cd's into the test dir and uses relative, bracket-free paths.
 
-When you change the export surface, update `docs.md` and add/adjust the matching
+When you change the export surface, update the matching page in `docs/` and add/adjust the matching
 smoke test in the same change.
+
+## Documentation
+
+User-facing documentation lives in `docs/` (Markdown, published via the Kora Docusaurus site, kora_docs_next). Read `docs/index.md` first for an overview of installation, configuration, the Lua API, exports, compatibility, commands, events and database usage. The old root `docs.md` is superseded by `docs/`.
+
+When you add, change, or remove a feature, config option, convar, command, export, event, item, permission, or database table/column, update the matching page in `docs/` in the same change. Keep docs accurate to the code; do not document behaviour that does not exist.
+
+Docs rules: plain Markdown with `title`/`sidebar_position` front matter (no `id`/`slug`), relative links only between docs pages, assets inside `docs/`, fenced code blocks with a language, and no raw `<`, `>`, `{`, `}` outside code (pages are parsed as MDX). The release version comes from `fxmanifest.lua`'s `version` field.
