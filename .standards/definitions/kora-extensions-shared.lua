@@ -1,0 +1,10 @@
+---@meta
+-- Annotation-only consumer API from kora_core/init.lua; no runtime code is loaded.
+---@class KoraSharedRegistry
+---@field get fun(name: string, key: string): table|nil
+---@field all fun(name: string): table[]
+---@field epoch fun(name: string): integer
+---@field register fun(name: string, key: string, record: table): boolean, string?
+---@field unregister fun(name: string, key: string): boolean
+---@field onChange fun(name: string, handler: fun(action: string, key: string, record: table?, previous: table?)): integer
+---@field offChange fun(name: string, id: integer)

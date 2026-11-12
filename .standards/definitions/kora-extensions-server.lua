@@ -1,0 +1,35 @@
+---@meta
+-- Annotation-only opt-in Kora.sql surface, reviewed against kora_sql/init.lua.
+-- Availability still requires @kora_sql/init.lua in the consumer's server_scripts.
+---@alias KoraSqlParams table
+---@alias KoraSqlCallback fun(result: any, errorMessage?: string)
+---@class KoraSql
+---@field NULL string Explicit SQL NULL sentinel for parameter lists.
+---@field ready fun(timeoutMs?: number): boolean, string?
+---@field query fun(sql: string, params?: KoraSqlParams): table[]|nil, string?
+---@field single fun(sql: string, params?: KoraSqlParams): table|nil, string?
+---@field scalar fun(sql: string, params?: KoraSqlParams): any, string?
+---@field execute fun(sql: string, params?: KoraSqlParams): table|number|nil, string?
+---@field insert fun(sql: string, params?: KoraSqlParams): number|nil, string?
+---@field update fun(sql: string, params?: KoraSqlParams): number|nil, string?
+---@field batch fun(statements: table[]): table|nil, string?
+---@field transaction fun(statements: table[]|string[], params?: table): boolean|nil, string?
+---@field transactionChecked fun(statements: table[], operation?: table): table|nil, string?
+---@field awaitCheckedOperation fun(key: string, fingerprint?: string): table|nil, string?
+---@field awaitCheckedOperations fun(prefix: string): table|nil, string?
+---@field upsert fun(tableName: string, key: string|string[], rows: table, opts?: table): table|number|nil, string?
+---@field ensureTable fun(spec: table): table|nil, string?
+---@field ensureTables fun(specs: table[]): table|nil, string?
+---@field awaitTables fun(names: string[], timeoutMs?: number): boolean|nil, string?
+---@field stats fun(): table
+---@field enqueue fun(tableName: string, key: string|string[], row: table, opts?: table)
+---@field enqueueMany fun(tableName: string, key: string|string[], rows: table[], opts?: table)
+---@field flush fun(tableName?: string): boolean, string?
+---@field queryAsync fun(sql: string, params: KoraSqlParams?, callback: KoraSqlCallback)
+---@field singleAsync fun(sql: string, params: KoraSqlParams?, callback: KoraSqlCallback)
+---@field scalarAsync fun(sql: string, params: KoraSqlParams?, callback: KoraSqlCallback)
+---@field executeAsync fun(sql: string, params: KoraSqlParams?, callback: KoraSqlCallback)
+---@field insertAsync fun(sql: string, params: KoraSqlParams?, callback: KoraSqlCallback)
+---@field updateAsync fun(sql: string, params: KoraSqlParams?, callback: KoraSqlCallback)
+---@field ensureTableAsync fun(spec: table, callback: KoraSqlCallback)
+---@field ensureTablesAsync fun(specs: table[], callback: KoraSqlCallback)
