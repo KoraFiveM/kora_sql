@@ -12,17 +12,21 @@ What sets it apart:
 - **Prepared-statement cache.** SQL text that MySQL refuses to prepare is remembered and sent as plain text afterwards.
 - **Declarative schema.** `Kora.sql.ensureTable` creates missing tables and adds missing columns, indexes, foreign keys and checks.
 
-## Pages
+## Documentation map
 
-- [Installation](./installation.md) - dependencies, `server.cfg`, ensure order, compat stubs.
-- [Configuration](./configuration.md) - connection string, TLS options, every convar, and `config.lua`.
-- [Lua API](./lua-api.md) - the `Kora.sql.*` functions.
-- [Write queue](./write-queue.md) - `enqueue`, `enqueueMany`, `upsert`, `flush`, dead-letters and durability.
-- [Schema management](./schema.md) - `ensureTable` and `ensureTables` specs and safe `modify` rules.
-- [Exports](./exports.md) - the server exports of `kora_sql` itself.
-- [Compatibility](./compatibility.md) - oxmysql, mysql-async and ghmattimysql surfaces, typecast, and the native bridges.
-- [Commands](./commands.md) - the `/kora_sql` console command.
-- [Events](./events.md) - events kora_sql listens for and triggers.
+- [Installation](./installation.md) - database setup, `server.cfg`, connection strings, start order, migrating from oxmysql and the compat stubs.
+- [How to use](./how-to-use.md) - first query, result shapes, binding, error handling and a full worked example.
+- [Commands](./commands.md) - the `/kora_sql` console command (ping, stats, slow, queue, flush, bench).
+- [API reference](./api/index.md) - all modules:
+  - [Queries](./api/queries.md) - `Kora.sql.query`, `single`, `scalar`, `execute`, `insert`, `update` and callback variants.
+  - [Transactions](./api/transactions.md) - `transaction`, `batch`, `transactionChecked` and checked operations.
+  - [Write queue](./api/write-queue.md) - `enqueue`, `enqueueMany`, `upsert`, `flush`, dead-letters and durability.
+  - [Schema](./api/schema.md) - `ensureTable`, `ensureTables`, `awaitTables`, specs and safe `modify` rules.
+  - [Driver exports](./api/driver-exports.md) - the server exports of `kora_sql` itself, statistics and slow log.
+  - [Configuration](./api/configuration.md) - connection string, every convar and `config.lua`.
+  - [Events](./api/events.md) - `kora_sql:ready`, `oxmysql:transaction-error` and the events kora_sql handles.
+  - [Compatibility](./api/compatibility.md) - oxmysql, mysql-async and ghmattimysql surfaces, typecast and native bridges.
+  - [Security and best practices](./api/security.md) - what is protected, what is not, and checklists.
 - [Database](./database.md) - tables kora_sql creates and uses.
 - [Troubleshooting](./troubleshooting.md) - common errors and fixes.
 

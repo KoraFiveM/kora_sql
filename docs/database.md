@@ -1,13 +1,13 @@
 ---
 title: Database
-sidebar_position: 11
+sidebar_position: 7
 ---
 
 kora_sql connects to the database named in `mysql_connection_string` and creates two tables of its own at boot through `ensureTable`. The connection uses UTC (`timezone: 'Z'`), `decimalNumbers` and big-number support with numbers (not strings), and `stringifyObjects`.
 
 ## kora_sql_schema_owners
 
-Records which resource created each table made through `ensureTable`, and is used to decide who may apply a safe `modify` (see [Schema management](./schema.md)).
+Records which resource created each table made through `ensureTable`, and is used to decide who may apply a safe `modify` (see [Schema management](./api/schema.md)).
 
 | Column | Type | Notes |
 | --- | --- | --- |
@@ -17,7 +17,7 @@ Records which resource created each table made through `ensureTable`, and is use
 
 ## kora_sql_deadletter
 
-Rows the write queue could not write (see [Write queue](./write-queue.md)).
+Rows the write queue could not write (see [Write queue](./api/write-queue.md)).
 
 | Column | Type | Notes |
 | --- | --- | --- |
@@ -36,4 +36,4 @@ Created only by `/kora_sql bench` (`id varchar(32)` primary key, `v int`).
 
 ## Other tables
 
-kora_sql does not own your tables. Resources create theirs with `ensureTable`; the SQL they run goes through the pools described in [Configuration](./configuration.md).
+kora_sql does not own your tables. Resources create theirs with `ensureTable`; the SQL they run goes through the pools described in [Configuration](./api/configuration.md).
