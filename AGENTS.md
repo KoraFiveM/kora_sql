@@ -119,7 +119,16 @@ smoke test in the same change.
 
 ## Documentation
 
-User-facing documentation lives in `docs/` (Markdown, published via the Kora Docusaurus site, kora_docs_next). Read `docs/index.md` first for an overview of installation, configuration, the Lua API, exports, compatibility, commands, events and database usage. The old root `docs.md` is superseded by `docs/`.
+User-facing documentation lives in `docs/` (Markdown, published via the Kora Docusaurus site, kora_docs_next). Read `docs/index.md` first; it is the hub with a documentation map linking every page. Layout, so changes update the right page:
+
+- `docs/index.md` - overview, features, quick start and the documentation map (add every new page here).
+- `docs/installation.md` - database setup, `server.cfg`, connection strings, start order, compat stubs, migrating from oxmysql.
+- `docs/how-to-use.md` - first query, result shapes, binding, error handling, worked example.
+- `docs/commands.md` - the `/kora_sql` console command.
+- `docs/api/` - one page per module: `queries.md`, `transactions.md`, `write-queue.md`, `schema.md`, `driver-exports.md` (the server exports), `configuration.md` (convars and `config.lua`), `events.md`, `compatibility.md` (oxmysql/mysql-async/ghmattimysql), `security.md`, plus `index.md`.
+- Topic pages: `docs/database.md` (tables kora_sql creates) and `docs/troubleshooting.md`.
+
+The content of the pages was restored from the legacy docs site (KoraFiveM/kora_docs, `src/data/kora_sql.js`) and merged with the pages derived from the code. The old root `docs.md` is superseded by `docs/`. Feature and behaviour changes must update the matching docs in the same change.
 
 When you add, change, or remove a feature, config option, convar, command, export, event, item, permission, or database table/column, update the matching page in `docs/` in the same change. Keep docs accurate to the code; do not document behaviour that does not exist.
 

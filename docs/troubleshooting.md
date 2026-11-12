@@ -1,6 +1,6 @@
 ---
 title: Troubleshooting
-sidebar_position: 12
+sidebar_position: 6
 ---
 
 ## FAILED TO START in the console
@@ -34,7 +34,7 @@ Check `kora_sql_ox_typecast`. It applies only on the oxmysql path; `Kora.sql.*` 
 
 ## Schema differences are only warnings
 
-`ensureTable` never alters existing columns unless `modify = true` and every safe-modify condition holds. See [Schema management](./schema.md).
+`ensureTable` never alters existing columns unless `modify = true` and every safe-modify condition holds. See [Schema management](./api/schema.md).
 
 ## Connection string password leaked
 
