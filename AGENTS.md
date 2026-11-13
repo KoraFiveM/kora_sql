@@ -68,14 +68,14 @@ trailing-argument peeling has a stable argument count.
 kora_sql does NOT `provide 'oxmysql'`. Sharing the name with the placeholder made
 `stop oxmysql` stop kora_sql, and after `restart kora_sql` the name resolved to
 kora_sql (version 1.0.0), breaking ox_inventory's version check. The placeholder
-`stubs/oxmysql/` alone owns the name. Resources that declare `dependency 'oxmysql'`,
+the `oxmysql` placeholder in KoraFiveM/compat alone owns the name. Resources that declare `dependency 'oxmysql'`,
 include `@oxmysql/lib/MySQL.lua` or check `lib.checkDependency('oxmysql', '2.7.3')`
 (stock ox_inventory) REQUIRE it, deployed as `[compat]/oxmysql` (version 2.7.3,
 ensured after kora_sql; real oxmysql must not run). `exports.oxmysql:*` works
 without the placeholder (the manual `__cfx_export_oxmysql_*` handlers). `provide
 'ghmattimysql'` is kept. kora_sql does NOT `provide 'mysql-async'` either:
-`stubs/mysql-async/` owns that name the same way. Deploy it as
-`resources/[compat]/mysql-async` (copy the folder), `ensure` it after kora_sql, for
+the `mysql-async` placeholder in KoraFiveM/compat owns that name the same way. It is deployed as
+`resources/[compat]/mysql-async` by the txAdmin recipe; `ensure` it after kora_sql, for
 consumers with `dependency 'mysql-async'` or an `@mysql-async/lib/MySQL.lua` include;
 never run real mysql-async with it. Export identity always requires the manual handlers above.
 

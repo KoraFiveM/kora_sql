@@ -295,8 +295,8 @@ original calling resource, not to kora_sql.
 ## mysql-async compat
 
 kora_sql does not `provide 'mysql-async'`. For `dependency 'mysql-async'` or
-`@mysql-async/lib/MySQL.lua` includes, copy `stubs/mysql-async` to
-`resources/[compat]/mysql-async` and `ensure` it after kora_sql (never alongside
+`@mysql-async/lib/MySQL.lua` includes, use the `mysql-async` placeholder from KoraFiveM/compat
+(`resources/[compat]/mysql-async`) and `ensure` it after kora_sql (never alongside
 the real mysql-async). `exports['mysql-async']:mysql_fetch_all / mysql_fetch_scalar /
 mysql_execute / mysql_insert / mysql_transaction / mysql_store / is_ready` are served by kora_sql
 without the stub.

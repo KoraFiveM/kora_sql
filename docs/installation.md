@@ -114,20 +114,20 @@ server_scripts {
 
 An existing server.cfg keeps working because the convar name `mysql_connection_string` is the same. Remove the old driver, `ensure kora_sql`, and existing resources continue to call their usual exports. Two things need extra steps for resources that check for the old resource name:
 
-- Resources that declare `dependency 'oxmysql'`, include `@oxmysql/lib/MySQL.lua` or call `lib.checkDependency('oxmysql', '2.7.3')` need the placeholder in `stubs/oxmysql`. Copy it to `resources/[compat]/oxmysql` and `ensure` it after `kora_sql`. Kora SQL deliberately does not `provide 'oxmysql'`, so `stop oxmysql` cannot stop the driver.
-- The same applies to `mysql-async`: copy `stubs/mysql-async` to `resources/[compat]/mysql-async` and `ensure` it after `kora_sql` for resources that declare `dependency 'mysql-async'` or include `@mysql-async/lib/MySQL.lua`.
+- Resources that declare `dependency 'oxmysql'`, include `@oxmysql/lib/MySQL.lua` or call `lib.checkDependency('oxmysql', '2.7.3')` need the `oxmysql` placeholder from the KoraFiveM/compat repo (deployed to `resources/[compat]/oxmysql` by the txAdmin recipe). `ensure` it after `kora_sql`. Kora SQL deliberately does not `provide 'oxmysql'`, so `stop oxmysql` cannot stop the driver.
+- The same applies to `mysql-async`: use the `mysql-async` placeholder from KoraFiveM/compat (`resources/[compat]/mysql-async`) and `ensure` it after `kora_sql` for resources that declare `dependency 'mysql-async'` or include `@mysql-async/lib/MySQL.lua`.
 - Never run the real oxmysql or mysql-async next to Kora SQL: they would compete for the same `__cfx_export_*` handlers.
 - `exports.oxmysql:*`, `exports['mysql-async']:*` and `exports.ghmattimysql:*` work without any placeholder. The manifest does `provide 'ghmattimysql'`.
 
 ## Compatibility stubs
 
-kora_sql serves `exports.oxmysql:*`, `exports['mysql-async']:*` and `exports.ghmattimysql:*` itself. Resources that need the resource names `oxmysql` or `mysql-async` (a `dependency`, an `@oxmysql/lib/MySQL.lua` include, or a version check such as ox_inventory's) need a stub deployed from this repository, ensured after kora_sql:
+kora_sql serves `exports.oxmysql:*`, `exports['mysql-async']:*` and `exports.ghmattimysql:*` itself. Resources that need the resource names `oxmysql` or `mysql-async` (a `dependency`, an `@oxmysql/lib/MySQL.lua` include, or a version check such as ox_inventory's) need a stub from the [KoraFiveM/compat](https://github.com/KoraFiveM/compat) repo (deployed to `resources/[compat]` by the txAdmin recipe), ensured after kora_sql:
 
 ```cfg title="server.cfg"
 ensure kora_lib
 ensure kora_sql
-ensure oxmysql        # copy of stubs/oxmysql in resources/[compat]/oxmysql
-ensure mysql-async    # copy of stubs/mysql-async in resources/[compat]/mysql-async
+ensure oxmysql        # from KoraFiveM/compat -> resources/[compat]/oxmysql
+ensure mysql-async    # from KoraFiveM/compat -> resources/[compat]/mysql-async
 ```
 
 See [Compatibility](./api/compatibility.md) for what each stub declares.

@@ -8,7 +8,7 @@ sidebar_position: 9
 
 Kora SQL answers to the export names of oxmysql, mysql-async and ghmattimysql so existing resources work without edits. New Kora code should use `Kora.sql.*`. This page explains what is emulated and where behavior differs.
 
-Namespace: `exports.oxmysql · exports['mysql-async'] · exports.ghmattimysql` · Source: `server/compat/*.lua, lib/MySQL.lua, server/js/typecast.js, stubs/*`
+Namespace: `exports.oxmysql · exports['mysql-async'] · exports.ghmattimysql` · Source: `server/compat/*.lua, lib/MySQL.lua, server/js/typecast.js`
 
 ## How it works
 
@@ -17,7 +17,7 @@ Each compatibility file registers handlers for `__cfx_export_<resource>_<name>`,
 ## Move a legacy resource onto Kora SQL
 
 1. **Stop the old driver** — Remove `oxmysql`, `mysql-async` and `ghmattimysql` from `server.cfg`. Do not run them with kora_sql.
-2. **Add the placeholder if needed** — If a resource declares a dependency on the old name, deploy the stub from `stubs/oxmysql` or `stubs/mysql-async` after `kora_sql`.
+2. **Add the placeholder if needed** — If a resource declares a dependency on the old name, deploy the stub from KoraFiveM/compat (`oxmysql` or `mysql-async`) after `kora_sql`.
 3. **Test the typed results** — Booleans, dates and JSON arrive in oxmysql’s format on this path. Compare a few queries before and after.
 4. **Migrate hot paths** — Replace `*Sync` calls and heavy save loops with `Kora.sql.*` and the write queue over time.
 
@@ -180,8 +180,8 @@ The `.await` form raises the database error instead of returning it, so wrap it 
 
 `fxmanifest.lua` does `provide 'ghmattimysql'` only. It deliberately does not provide `oxmysql` or `mysql-async`. Instead:
 
-- `stubs/oxmysql` is a placeholder resource named `oxmysql` (declares `version '2.7.3'`, depends on kora_sql, ships `lib/MySQL.lua`). Deploy it as `resources/[compat]/oxmysql`, ensured after kora_sql, for resources with `dependency 'oxmysql'`, an `@oxmysql/lib/MySQL.lua` include, or a version check (stock ox_inventory requires it).
-- `stubs/mysql-async` is the same for `mysql-async` (declares `version '3.3.2'`).
+- `oxmysql` (in KoraFiveM/compat) is a placeholder resource named `oxmysql` (declares `version '2.7.3'`, depends on kora_sql, ships `lib/MySQL.lua`). Deploy it as `resources/[compat]/oxmysql`, ensured after kora_sql, for resources with `dependency 'oxmysql'`, an `@oxmysql/lib/MySQL.lua` include, or a version check (stock ox_inventory requires it).
+- `mysql-async` (in KoraFiveM/compat) is the same for `mysql-async` (declares `version '3.3.2'`).
 - Their `lib/MySQL.lua` files load kora_sql's `lib/MySQL.lua` into the including resource's VM. The stubs register no exports.
 
 Resources that only call `exports.oxmysql:*` or `exports['mysql-async']:*` work without any stub. Never run the real oxmysql or mysql-async alongside kora_sql.

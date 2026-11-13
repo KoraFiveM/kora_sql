@@ -18,7 +18,7 @@ Every connection in a pool is busy. Look at `/kora_sql slow`, raise the pool siz
 
 ## A resource asks for oxmysql or mysql-async and will not start
 
-It needs the stub resource. Deploy `stubs/oxmysql` or `stubs/mysql-async` as described in [Installation](./installation.md). Remove any real oxmysql.
+It needs the stub resource. Use the `oxmysql` or `mysql-async` placeholder from KoraFiveM/compat as described in [Installation](./installation.md). Remove any real oxmysql.
 
 ## Multi-statement query refused
 

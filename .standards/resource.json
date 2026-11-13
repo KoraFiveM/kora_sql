@@ -11,15 +11,11 @@
       "server/compat/ghmattimysql.lua",
       "server/compat/mysql-async.lua",
       "server/compat/oxmysql.lua",
-      "server/ready.lua",
-      "stubs/mysql-async/lib/MySQL.lua",
-      "stubs/oxmysql/lib/MySQL.lua"
+      "server/ready.lua"
     ],
     "shared": [],
     "manifest": [
-      "fxmanifest.lua",
-      "stubs/mysql-async/fxmanifest.lua",
-      "stubs/oxmysql/fxmanifest.lua"
+      "fxmanifest.lua"
     ],
     "test": [
       "test/harness.lua",
@@ -28,8 +24,7 @@
       "test/smoke/mysql_async.lua",
       "test/smoke/mysql_lib.lua",
       "test/smoke/oxmysql.lua",
-      "test/smoke/oxmysql_multistatement.lua",
-      "test/smoke/oxmysql_placeholder.lua"
+      "test/smoke/oxmysql_multistatement.lua"
     ]
   },
   "exclude": [
