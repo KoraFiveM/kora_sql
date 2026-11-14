@@ -50,10 +50,6 @@ var require_config = __commonJS({
       return Number.isFinite(n) ? n : def;
     }
     __name(getIntConvar, "getIntConvar");
-    function getRenamedIntConvar(name, oldName, def) {
-      return getIntConvar(name, getIntConvar(oldName, def));
-    }
-    __name(getRenamedIntConvar, "getRenamedIntConvar");
     function getBoolConvar(name, def) {
       const raw = getConvar(name, null);
       if (raw === null) return def;
@@ -166,26 +162,15 @@ var require_config = __commonJS({
         connection,
         readPoolSize: getIntConvar("kora_sql_read_pool_size", 16),
         writePoolSize: getIntConvar("kora_sql_write_pool_size", 8),
-        // A separate small pool for the write queue's flush, so ad-hoc writes,
-        // transactions and schema work cannot starve player saves. 0 = flush
-        // on the write pool (the previous behaviour).
         flushPoolSize: Math.max(0, getIntConvar("kora_sql_flush_pool_size", 4)),
-        // Read-pool statement timeout in ms (client side, plus the server's
-        // max_execution_time / max_statement_time on read connections). 0 = off.
         queryTimeout: Math.max(0, getIntConvar("kora_sql_query_timeout", 3e4)),
-        // Longest a query waits for a free pool connection before failing. 0 = forever.
         acquireTimeout: Math.max(0, getIntConvar("kora_sql_acquire_timeout", 3e4)),
-        // Callers allowed to wait for a connection per pool before new calls fail fast. 0 = unbounded.
         poolQueueLimit: Math.max(0, getIntConvar("kora_sql_pool_queue_limit", 1e4)),
-        // Concurrent startTransaction callbacks (each pins a write connection for up to 30 s).
         maxStartTransactions: Math.max(0, getIntConvar("kora_sql_max_start_transactions", 0)),
-        // Distinct query fingerprints kept by /kora_sql stats; older ones fold into <other>.
         statsMaxFingerprints: Math.max(1, getIntConvar("kora_sql_stats_max_fingerprints", 2e3)),
-        // Check each queued table's conflict key against its PRIMARY/UNIQUE indexes once.
         verifyConflictKeys: getBoolConvar("kora_sql_verify_conflict_keys", true),
-        // ensureTable `modify = true` (still owner-only and widening-only).
         schemaAllowModify: getBoolConvar("kora_sql_schema_allow_modify", true),
-        statementCache: getRenamedIntConvar("kora_sql_statement_cache", "kora_sql_statement_cache", 256),
+        statementCache: getIntConvar("kora_sql_statement_cache", 256),
         flushInterval: getIntConvar("kora_sql_flush_interval", 250),
         maxPendingRows: getIntConvar("kora_sql_max_pending_rows", 500),
         maxRowsPerStatement: getIntConvar("kora_sql_max_rows_per_statement", 200),
@@ -195,10 +180,7 @@ var require_config = __commonJS({
         slowRing: getIntConvar("kora_sql_slow_ring", 200),
         allowMultipleStatements: getBoolConvar("kora_sql_allow_multiple_statements", false),
         connectRetryInterval: Math.max(250, getIntConvar("kora_sql_connect_retry_interval", 2e3)),
-        // oxmysql-style typeCast on the oxmysql compat exports only (default on, like oxmysql).
         oxTypeCast: getBoolConvar("kora_sql_ox_typecast", true),
-        // Collation for tables ensureTable CREATES without an explicit collate
-        // (existing tables are never altered). Empty = the server's charset default.
         defaultCollate: getConvar("kora_sql_default_collate", "utf8mb4_unicode_ci"),
         debug: getBoolConvar("kora_sql_debug", false)
       };
@@ -20767,44 +20749,18 @@ var require_pool4 = __commonJS({
         charset: connectionCollation(cfg.connection.charset),
         connectionLimit,
         waitForConnections: true,
-        // Bounded: during a database stall, new calls fail fast with "Queue
-        // limit reached." instead of accumulating in memory without limit.
-        // 0 (kora_sql_pool_queue_limit 0) restores the unbounded queue.
         queueLimit: cfg.poolQueueLimit || 0,
         enableKeepAlive: true,
         keepAliveInitialDelay: 1e4,
-        // connectTimeout bounds how long establishing a NEW physical
-        // connection may hang (DB unreachable, network stall, firewall
-        // black-hole). The wait for a BUSY connection is bounded separately by
-        // withAcquireTimeout() below. Overridable with ?connectTimeout=.
         connectTimeout: cfg.connection.connectTimeout || 1e4,
-        // The text protocol (parameter-less SQL, the unpreparable fallback)
-        // must never expand an object bind into `col = value, ...` assignments
-        // (`UPDATE players SET ? ...` with a client-supplied table would
-        // mass-assign columns). The binary protocol JSON-encodes objects anyway.
         stringifyObjects: true,
-        // mysql2 returns DECIMAL as a STRING by default. Left off, every money
-        // column arrives in Lua as "1250.00" and arithmetic silently breaks.
         decimalNumbers: true,
-        // BIGINT beyond 2^53 would lose precision as a JS number; keep it a
-        // number where safe, never a string (oxmysql normalises the same way,
-        // so legacy code expecting numbers keeps working).
         supportBigNumbers: true,
         bigNumberStrings: false,
-        // Gives mysql-async's `@name` named-placeholder syntax for free -- the
-        // compat layer relies on it.
         namedPlaceholders: true,
-        // DATETIME/TIMESTAMP come back as JS Date objects, marshalled to Lua as
-        // a number. Configurable divergence from oxmysql's string form is a
-        // documented risk (see docs.md); default matches mysql2.
         dateStrings: false,
         timezone: "Z",
-        // Refused by default -- see server/compat/oxmysql.lua's multi-statement
-        // refusal. The prepared-statement path (execute) does not permit it
-        // regardless; this only governs the query() fallback path.
         multipleStatements: cfg.allowMultipleStatements,
-        // Per-connection prepared-statement LRU inside mysql2 itself. Our own
-        // statements.js LRU tracks the UNPREPARABLE set on top of this.
         maxPreparedStatements: statementCache || cfg.statementCache
       };
       if (cfg.connection.ssl) options.ssl = cfg.connection.ssl;
@@ -20935,8 +20891,6 @@ var require_statements = __commonJS({
         this.maxSize = maxSize;
         this.entries = /* @__PURE__ */ new Map();
       }
-      // Returns the record for a SQL text, creating it on first sight. Touching
-      // it (delete + set) moves it to the most-recently-used end.
       touch(sql) {
         let rec = this.entries.get(sql);
         if (rec) {
@@ -20966,9 +20920,6 @@ var require_statements = __commonJS({
       recordMiss(sql) {
         this.touch(sql).misses++;
       }
-      // Aggregate stats for /kora_sql stats. preparedHitRate here is a coarse proxy
-      // (hits vs misses across cached statements); the precise per-flush prepared
-      // hit rate lives in stats.js.
       summary() {
         let hits = 0, misses = 0, unpreparable = 0;
         for (const rec of this.entries.values()) {
@@ -20991,7 +20942,6 @@ var require_statements = __commonJS({
       "ER_UNSUPPORTED_PS",
       "ER_WRONG_ARGUMENTS",
       "ER_PARSE_ERROR_IN_PS"
-      // some servers report a generic parse error only at prepare time
     ]);
     function isUnpreparableError(err) {
       return err && UNPREPARABLE_CODES.has(err.code);
@@ -21047,15 +20997,11 @@ var require_stats = __commonJS({
         this.slowHead = 0;
         this.queue = {
           boundaryCrossings: 0,
-          // enqueue/enqueueMany calls from Lua
           rowsEnqueued: 0,
-          // rows handed in
           rowsWritten: 0,
-          // rows actually sent to MySQL (post-merge)
           statementsIssued: 0,
           flushes: 0,
           flushDurationMs: [],
-          // recent flush durations
           deadLettered: 0,
           retries: 0
         };
@@ -21152,8 +21098,6 @@ var require_stats = __commonJS({
             boundaryCrossings: q.boundaryCrossings,
             rowsEnqueued: q.rowsEnqueued,
             rowsWritten: q.rowsWritten,
-            // The headline number: rows callers handed us vs rows we
-            // actually wrote. > 1.0 means coalescing saved round trips.
             coalesceRatio: q.rowsWritten ? q.rowsEnqueued / q.rowsWritten : 0,
             statementsIssued: q.statementsIssued,
             statementsPerFlush: q.flushes ? q.statementsIssued / q.flushes : 0,
@@ -21323,6 +21267,46 @@ var require_execute3 = __commonJS({
       return { sql: out, params: normalized };
     }
     __name(normalizeNamedPlaceholders, "normalizeNamedPlaceholders");
+    function countPlaceholders(sql) {
+      let count = 0;
+      let state = "code";
+      for (let i = 0; i < sql.length; i++) {
+        const c = sql[i];
+        const next = sql[i + 1];
+        if (state === "code") {
+          if (c === "'") state = "single";
+          else if (c === '"') state = "double";
+          else if (c === "`") state = "backtick";
+          else if (c === "-" && next === "-") state = "line";
+          else if (c === "#") state = "line";
+          else if (c === "/" && next === "*") {
+            state = "block";
+            i++;
+          } else if (c === "?") count++;
+        } else if (state === "single" || state === "double") {
+          if (c === "\\") i++;
+          else if (c === (state === "single" ? "'" : '"')) state = "code";
+        } else if (state === "backtick") {
+          if (c === "`") state = "code";
+        } else if (state === "line") {
+          if (c === "\n" || c === "\r") state = "code";
+        } else if (state === "block" && c === "*" && next === "/") {
+          i++;
+          state = "code";
+        }
+      }
+      return count;
+    }
+    __name(countPlaceholders, "countPlaceholders");
+    function padParams(sql, params) {
+      if (!Array.isArray(params) || typeof sql !== "string" || !sql.includes("?")) return params;
+      const expected = countPlaceholders(sql);
+      if (params.length >= expected) return params;
+      const padded = params.slice();
+      while (padded.length < expected) padded.push(null);
+      return padded;
+    }
+    __name(padParams, "padParams");
     function hasNoBinds(params) {
       return Array.isArray(params) && params.length === 0;
     }
@@ -21356,6 +21340,7 @@ var require_execute3 = __commonJS({
     }
     __name(textParams, "textParams");
     async function runOnConnection(conn, sql, params, statements) {
+      params = padParams(sql, params);
       if (!hasNoBinds(params) && !needsTextProtocol(params) && (!statements || statements.isPreparable(sql))) {
         try {
           const result = await conn.execute(sql, params);
@@ -21384,15 +21369,6 @@ var require_execute3 = __commonJS({
         this.legacyHousing = legacyHousing;
         this.readTimeout = 0;
       }
-      // A view of this executor whose queries apply oxmysql's typeCast (booleans,
-      // date-as-ms, binary blobs, JSON strings). Only the oxmysql compatibility
-      // export path uses it; the native executor's result shapes are unchanged.
-      // WARNING: the view is Object.create(this), so reads fall through to the
-      // base executor but any instance-field WRITE (this.x = ...) made while
-      // running on the view lands on the view and is invisible to the base (and
-      // vice versa for later replacement). Executor methods must mutate shared
-      // state only through objects (pools/statements/stats), never by assigning
-      // new values to fields on `this`.
       withOxTypeCast() {
         if (!this._oxView) {
           this._oxView = Object.create(this);
@@ -21400,10 +21376,6 @@ var require_execute3 = __commonJS({
         }
         return this._oxView;
       }
-      // Choose the pool. Writes and anything ambiguous go to the write pool; only
-      // statements that are unambiguously reads go to the read pool. A leading
-      // SELECT or SHOW or WITH is the cheap, safe heuristic; a false negative
-      // (a read sent to the write pool) costs nothing but a little scheduling.
       _poolFor(sql) {
         const head = sql.slice(0, 8).toLowerCase().trimStart();
         if (head.startsWith("select") || head.startsWith("show") || head.startsWith("with") || head.startsWith("desc")) {
@@ -21411,8 +21383,6 @@ var require_execute3 = __commonJS({
         }
         return this.pools.write;
       }
-      // Build mysql2's call arguments. The positional form is kept when no
-      // per-call option applies, so plain calls stay identical to before.
       _args(pool, sql, params, cast) {
         const timeout = pool === this.pools.read && this.readTimeout > 0 ? this.readTimeout : 0;
         if (!cast && !timeout) return [sql, params];
@@ -21421,21 +21391,15 @@ var require_execute3 = __commonJS({
         if (timeout) options.timeout = timeout;
         return [options];
       }
-      // Text protocol. `cast` defaults to the full oxmysql text typeCast, which
-      // the unpreparable fallback has always used.
       _query(pool, sql, params, cast) {
         return pool.query(...this._args(pool, sql, textParams(params), this._oxTypeCast ? cast || typeCast : null));
       }
       _execute(pool, sql, params) {
         return pool.execute(...this._args(pool, sql, params, this._oxTypeCast ? typeCastExecute : null));
       }
-      // The one true executor. Returns mysql2's raw [rows|result, fields] pair.
-      // Keeping the pair until the final shape adapter is important for
-      // oxmysql.rawExecute, whose public contract deliberately exposes the raw
-      // response rather than parseResponse's query/single/scalar projections.
       async runRaw(sql, params, resource) {
         ({ sql, params } = normalizeNamedPlaceholders(sql, params));
-        params = normalizeParams(params);
+        params = padParams(sql, normalizeParams(params));
         const pool = this._poolFor(sql);
         const started = process.hrtime.bigint();
         let errored = false;
@@ -21487,7 +21451,6 @@ var require_execute3 = __commonJS({
         const rows = await this.runOne(sql, params, resource);
         return Array.isArray(rows) && rows.length ? rows[0] : null;
       }
-      // The first column of the first row -- oxmysql's `scalar`.
       async scalar(sql, params, resource) {
         const rows = await this.runOne(sql, params, resource);
         if (!Array.isArray(rows) || !rows.length) return null;
@@ -21495,7 +21458,6 @@ var require_execute3 = __commonJS({
         const keys = Object.keys(first);
         return keys.length ? first[keys[0]] : null;
       }
-      // execute() returns the OkPacket shape oxmysql callers expect.
       async execute(sql, params, resource) {
         const result = await this.runOne(sql, params, resource);
         if (Array.isArray(result)) {
@@ -21516,9 +21478,6 @@ var require_execute3 = __commonJS({
         const r = await this.execute(sql, params, resource);
         return r.affectedRows;
       }
-      // oxmysql's prepare API accepts either one parameter list or an array of
-      // parameter lists, executes each set, and unpacks each response. This is
-      // distinct from kora_sql's execute() OkPacket-shaped modern API.
       async prepare(sql, params, resource) {
         const sets = toParamSets(params);
         const responses = [];
@@ -21536,11 +21495,6 @@ var require_execute3 = __commonJS({
         }
         return responses.length === 1 ? responses[0] : responses;
       }
-      // oxmysql.rawExecute is prepare without response unpacking. oxmysql's
-      // connection wrapper has already removed mysql2's fields metadata by this
-      // point, so expose result values (rows/ResultSetHeader), not our internal
-      // [result, fields] transport pair. Multiple row/result sets are flattened
-      // the same way upstream appends them to its response array.
       async rawExecute(sql, params, resource) {
         const sets = toParamSets(params);
         const responses = [];
@@ -21554,7 +21508,7 @@ var require_execute3 = __commonJS({
     };
     __name(_Executor, "Executor");
     var Executor2 = _Executor;
-    module2.exports = { Executor: Executor2, normalizeParams, normalizeNamedPlaceholders, runOnConnection, hasNoBinds, needsTextProtocol, textParams, NULL_SENTINEL };
+    module2.exports = { Executor: Executor2, normalizeParams, normalizeNamedPlaceholders, runOnConnection, countPlaceholders, padParams, hasNoBinds, needsTextProtocol, textParams, NULL_SENTINEL };
   }
 });
 
@@ -21989,8 +21943,6 @@ var require_queue = __commonJS({
         this.verifyFailures = /* @__PURE__ */ new Map();
         this.warnedRejects = /* @__PURE__ */ new Set();
       }
-      // The flush writes on its own pool when one is configured, so ad-hoc
-      // writes and long transactions cannot starve the save path.
       _pool() {
         return this.pools.flush || this.pools.write;
       }
@@ -22002,7 +21954,6 @@ var require_queue = __commonJS({
             mode,
             writeMode,
             rows: /* @__PURE__ */ new Map(),
-            // pk key -> dead-letter attempts that failed (see M2 cap).
             poison: /* @__PURE__ */ new Map(),
             generation: 0,
             completedGeneration: 0,
@@ -22021,10 +21972,6 @@ var require_queue = __commonJS({
         this._verifyConflictKey(table, conflictKey);
         return st;
       }
-      // Warn (once per table and key) when the conflict key is not exactly a
-      // PRIMARY/UNIQUE index: ON DUPLICATE KEY UPDATE would then never fire and
-      // every flush would INSERT duplicate rows, and update mode would scan.
-      // Fire-and-forget so enqueue() stays synchronous.
       _verifyConflictKey(table, keyCols) {
         if (!this.cfg.verifyConflictKeys) return;
         const id = `${table}|${keyCols.join(",")}`;
@@ -22047,8 +21994,6 @@ var require_queue = __commonJS({
           log2.debug("queue", `could not verify the conflict key of ${table}: ${err.message}`);
         });
       }
-      // Validate a call's table, key and options. Returns the normalised key
-      // column list. Throws synchronously, before anything is queued.
       _checkTarget(table, conflictKey, opts) {
         if (!isIdent(table)) throw invalid("bad-table", `kora_sql/queue: invalid table name '${table}'`);
         const keyCols = Array.isArray(conflictKey) ? conflictKey : [conflictKey];
@@ -22068,9 +22013,6 @@ var require_queue = __commonJS({
         }
         return { keyCols, mode, writeMode, allowed };
       }
-      // Validate one { pk, cols } row and return its merge key and a private copy
-      // of its columns. Column names are identifiers, never key columns, and
-      // (with opts.allowedColumns) only the columns the caller allowed.
       _prepareRow(table, target, row) {
         if (!row || typeof row !== "object" || !row.cols || typeof row.cols !== "object" || Array.isArray(row.cols)) {
           throw invalid("bad-row", `kora_sql/queue: rows for ${table} must be { pk = ..., cols = { ... } }`);
@@ -22093,7 +22035,6 @@ var require_queue = __commonJS({
         }
         return { key, pk: row.pk, cols };
       }
-      // Merge validated rows into the table's pending set.
       _merge(table, target, prepared) {
         const st = this._tableState(table, target.keyCols, target.mode, target.writeMode);
         for (const row of prepared) {
@@ -22112,7 +22053,6 @@ var require_queue = __commonJS({
           }
         }
       }
-      // Log a rejected enqueue input once per (resource, reason), and count it.
       _reject(resource, table, err, rows) {
         const reason = err.reason || "error";
         if (this.stats.queue) this.stats.queue.rejectedRows = (this.stats.queue.rejectedRows || 0) + rows;
@@ -22125,12 +22065,6 @@ var require_queue = __commonJS({
           `dropped ${rows} invalid row(s) for ${table} from ${resource || "an unknown resource"}: ${err.message} (the rest of the call was queued; logged once per resource and reason)`
         );
       }
-      // Validate and merge rows. Valid rows are queued; invalid rows are dropped
-      // and logged (never thrown) so one bad row -- e.g. a player whose key is
-      // not loaded yet -- cannot cost every other row in the save batch, nor
-      // raise into the caller's save loop. With opts.strict (the awaited
-      // upsert export) validation is all-or-nothing and the first error throws.
-      // Returns { queued, dropped }.
       _enqueue(table, conflictKey, rows, opts, resource, strict) {
         let target;
         try {
@@ -22162,15 +22096,9 @@ var require_queue = __commonJS({
         this._scheduleOrTrip(opts.priority === "immediate" ? table : null);
         return { queued: prepared.length, dropped };
       }
-      // Enqueue one row. Fire-and-forget: never returns a promise the caller
-      // waits on, and never throws. `row` is { pk, cols }.
       enqueue(table, conflictKey, row, opts, resource) {
         return this._enqueue(table, conflictKey, [row], opts || {}, resource, false);
       }
-      // Enqueue many rows in one call -- the single-boundary-crossing path.
-      // Valid rows are queued even when others in the call are invalid (see
-      // _enqueue). Scheduling happens once, so an 'immediate' batch is one
-      // flush rather than one per row. opts.strict: all-or-nothing, throws.
       enqueueMany(table, conflictKey, rows, opts, resource) {
         opts = opts || {};
         const strict = opts.strict === true;
@@ -22196,7 +22124,6 @@ var require_queue = __commonJS({
         }
         this._ensureTimer();
       }
-      // Arm the shared interval timer if it is not already running. Idempotent.
       _ensureTimer() {
         if (!this.timer) {
           this.timer = setTimeout(() => {
@@ -22206,8 +22133,6 @@ var require_queue = __commonJS({
           if (this.timer.unref) this.timer.unref();
         }
       }
-      // Wait for the writes covered by this call, including already active writes.
-      // Tables can flush in parallel, but writes to one table remain serialized.
       async flush(onlyTable) {
         const tables = onlyTable ? [onlyTable] : Array.from(this.pending.keys());
         let firstError;
@@ -22279,10 +22204,6 @@ var require_queue = __commonJS({
           st.flushing = false;
         }
       }
-      // Build and write one chunk. A deterministic failure (bad value, missing
-      // column, constraint) in a multi-row chunk is bisected so only the
-      // offending row(s) dead-letter instead of every row sharing the statement.
-      // Resolves to { statements, rows, error } and never rejects.
       async _writeChunk(table, st, columns, chunk, perStatement) {
         const builder = st.writeMode === "update" ? batch.buildUpdate : batch.build;
         const { sql, params, rowCount } = builder(
@@ -22293,7 +22214,6 @@ var require_queue = __commonJS({
           {
             mode: st.mode,
             dialect: this.dialect,
-            // Padding must not push a wide chunk past the placeholder budget.
             pad: this.cfg.padToBuckets && st.mode === "assign" && batch.bucketFor(chunk.length) <= perStatement
           }
         );
@@ -22313,8 +22233,6 @@ var require_queue = __commonJS({
           return out;
         }
       }
-      // Re-merge failed rows into the live pending set (see _writeWithRetry).
-      // Returns the map of hedge copies so a later outcome can clear them.
       _hedge(table, chunk, reMerged) {
         const st = this.pending.get(table);
         for (const entry of chunk) {
@@ -22353,17 +22271,11 @@ var require_queue = __commonJS({
           }
         }
       }
-      // Forget dead-letter failure counts of rows that were written.
       _clearPoison(table, chunk) {
         const st = this.pending.get(table);
         if (!st || !st.poison || st.poison.size === 0) return;
         for (const entry of chunk) st.poison.delete(pkKey(entry.pk));
       }
-      // Dead-letter `chunk` (whose rows are already hedged into pending), then
-      // clear the hedge for every row that is now safely recorded. A row whose
-      // dead-letter insert failed stays pending for a later flush, at most
-      // MAX_DEADLETTER_ATTEMPTS times; after that it is logged in full and
-      // dropped so a poison row cannot loop forever.
       async _deadLetterAndRelease(table, chunk, err, reMerged, mode) {
         const failed = await this._deadLetter(table, chunk, err);
         this.stats.queue.deadLettered += chunk.length - failed.length;
@@ -22394,7 +22306,6 @@ var require_queue = __commonJS({
         this._clearReMerged(table, reMerged, mode);
         return failed.length;
       }
-      // The error a dead-lettered chunk reports to flush() callers.
       _deadLetterError(table, what, chunk, failed) {
         return new Error(failed ? `kora_sql: write to ${table} failed ${what}; failed to dead-letter ${failed}/${chunk.length} row(s)` : `kora_sql: write to ${table} failed ${what}; ${chunk.length} row(s) were dead-lettered`);
       }
@@ -22437,10 +22348,6 @@ var require_queue = __commonJS({
           await this._writeWithRetry(table, sql, params, chunk, mode, attempt + 1, reMerged);
         }
       }
-      // Best-effort persistence of unwriteable rows so they are recoverable.
-      // One multi-row INSERT; if that fails (e.g. one oversized value), fall
-      // back to row by row so one bad row cannot sink the rest. Never throws:
-      // resolves to the entries that could NOT be dead-lettered.
       async _deadLetter(table, chunk, err) {
         const head = "INSERT INTO `kora_sql_deadletter` (`table_name`,`pk`,`cols_json`,`error`,`failed_at`) VALUES ";
         const group = "(?,?,?,?,NOW())";
@@ -22485,9 +22392,6 @@ var require_transaction = __commonJS({
     "use strict";
     var { normalizeParams, normalizeNamedPlaceholders, runOnConnection } = require_execute3();
     var _TransactionRunner = class _TransactionRunner {
-      // opts.statements: the shared StatementCache (unpreparable marks).
-      // opts.maxStartTransactions: concurrent startTransaction callbacks allowed
-      // to pin a write connection; later callers wait for a slot.
       constructor(pools, opts = {}) {
         this.pools = pools;
         this.statements = opts.statements || null;
@@ -22499,9 +22403,6 @@ var require_transaction = __commonJS({
       _run(conn, st) {
         return runOnConnection(conn, st.sql, st.params, this.statements);
       }
-      // A slot-limited semaphore for startTransaction: each callback can hold a
-      // write connection for up to 30 s, so an unbounded number of them could
-      // occupy the whole write pool.
       _acquireStartSlot() {
         if (this.startActive < this.startLimit) {
           this.startActive++;
@@ -22514,7 +22415,6 @@ var require_transaction = __commonJS({
         if (next) next();
         else this.startActive--;
       }
-      // Expected row counts are business preconditions, not merely SQL success.
       transactionChecked(queries, operation) {
         if (!operation) return this._transactionChecked(queries);
         if (typeof operation.key !== "string" || typeof operation.fingerprint !== "string") {
@@ -22605,12 +22505,6 @@ var require_transaction = __commonJS({
           else conn.release();
         }
       }
-      // Normalise oxmysql's two argument shapes into an array of {sql, params}.
-      //
-      // These run on a pinned connection rather than through the Executor, so
-      // normalizeParams has to be applied here too -- otherwise a
-      // holed Lua param array reaches mysql2 as undefined inside a transaction,
-      // where the failure also rolls back every sibling statement.
       _normalise(queries, maybeParams) {
         if (typeof queries === "string") {
           const sql = queries;
@@ -22673,10 +22567,6 @@ var require_transaction = __commonJS({
           else conn.release();
         }
       }
-      // Experimental oxmysql startTransaction contract. The callback receives a
-      // query function pinned to this connection and decides whether to commit
-      // (anything except explicit false) or roll back (false). A 30s deadline
-      // matches oxmysql and prevents a leaked callback from pinning a pool slot.
       async startTransaction(callback) {
         if (typeof callback !== "function") throw new TypeError("startTransaction requires a callback");
         await this._acquireStartSlot();
@@ -22743,8 +22633,6 @@ var require_transaction = __commonJS({
           else conn.release();
         }
       }
-      // batch: same pinned connection, sequential, NO transaction. Returns the
-      // per-statement results.
       async batch(queries, maybeParams) {
         const statements = this._normalise(queries, maybeParams);
         const conn = await this.pools.write.getConnection();
@@ -23216,8 +23104,6 @@ var require_schema = __commonJS({
     __name(buildSeed, "buildSeed");
     var ddl = /* @__PURE__ */ __name((sql) => ({ sql, namedPlaceholders: false }), "ddl");
     var _SchemaManager = class _SchemaManager {
-      // defaults: { createCollate, allowModify (default true), ownersTable }.
-      // Without an ownersTable no resource owns anything, so `modify` is refused.
       constructor(pools, defaults = {}) {
         this.pools = pools;
         this.defaults = defaults;
@@ -23225,13 +23111,9 @@ var require_schema = __commonJS({
         this.ownersTable = defaults.ownersTable || null;
         this._tails = /* @__PURE__ */ new Map();
       }
-      // information_schema reads go to the read pool, off the write pool the
-      // flush and transactions use.
       _readPool() {
         return this.pools.read || this.pools.write;
       }
-      // Record the creator of a table. Best effort: a failure only means the
-      // table stays unowned (pre-ownership modify behaviour).
       async _recordOwner(table, resource) {
         if (!this.ownersTable || !resource) return;
         try {
@@ -23246,8 +23128,6 @@ var require_schema = __commonJS({
           log2.debug("schema", `could not record the owner of ${table}: ${err.message}`);
         }
       }
-      // The recorded owner of `table`, or null when it has none (or ownership
-      // cannot be read). Never claims a table.
       async _ownerOf(table) {
         if (!this.ownersTable) return null;
         try {
@@ -23261,7 +23141,6 @@ var require_schema = __commonJS({
           return null;
         }
       }
-      // True when `column` of `table` holds at least one NULL (or the check fails).
       async _hasNulls(table, column) {
         try {
           const [rows] = await this.pools.write.query(`SELECT 1 FROM ${q(table)} WHERE ${q(column)} IS NULL LIMIT 1`);
@@ -23271,7 +23150,6 @@ var require_schema = __commonJS({
           return true;
         }
       }
-      // Serialise work per table so two resources racing on the same table do not interleave DDL.
       _serial(name, fn) {
         const tail = (this._tails.get(name) || Promise.resolve()).catch(() => {
         });
@@ -23365,7 +23243,6 @@ var require_schema = __commonJS({
           return report;
         });
       }
-      // Resolves once every named table exists, so a resource can wait for tables another resource creates.
       async awaitTables(names, timeoutMs, resource) {
         if (!Array.isArray(names) || names.length === 0 || names.some((n) => typeof n !== "string" || !IDENT.test(n))) {
           throw new Error("kora_sql schema: awaitTables expects a list of table names");
@@ -23384,7 +23261,6 @@ var require_schema = __commonJS({
           await new Promise((resolve) => setTimeout(resolve, 250));
         }
       }
-      // Runs in order so foreign key parents can be listed first. Stops at the first failure.
       async ensureTables(specs, resource) {
         if (!Array.isArray(specs)) throw new Error("kora_sql schema: ensureTables expects a list of table specs");
         const reports = [];
@@ -23754,8 +23630,6 @@ var api = {
   _readyPromise: null,
   _readyResolve: null,
   _readyReject: null,
-  // store() is deliberately synchronous and may be called by a compatibility
-  // consumer during resource startup, before the pool's first await settles.
   store: new HandleStore(),
   isReady() {
     return this._ready;
