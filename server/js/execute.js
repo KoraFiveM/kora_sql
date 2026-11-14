@@ -64,6 +64,49 @@ function normalizeNamedPlaceholders(sql, params) {
     return { sql: out, params: normalized };
 }
 
+// Counts positional `?` placeholders, ignoring quoted strings, backtick
+// identifiers and comments.
+function countPlaceholders(sql) {
+    let count = 0;
+    let state = 'code';
+    for (let i = 0; i < sql.length; i++) {
+        const c = sql[i];
+        const next = sql[i + 1];
+        if (state === 'code') {
+            if (c === "'") state = 'single';
+            else if (c === '"') state = 'double';
+            else if (c === '`') state = 'backtick';
+            else if (c === '-' && next === '-') state = 'line';
+            else if (c === '#') state = 'line';
+            else if (c === '/' && next === '*') { state = 'block'; i++; }
+            else if (c === '?') count++;
+        } else if (state === 'single' || state === 'double') {
+            if (c === '\\') i++;
+            else if (c === (state === 'single' ? "'" : '"')) state = 'code';
+        } else if (state === 'backtick') {
+            if (c === '`') state = 'code';
+        } else if (state === 'line') {
+            if (c === '\n' || c === '\r') state = 'code';
+        } else if (state === 'block' && c === '*' && next === '/') {
+            i++;
+            state = 'code';
+        }
+    }
+    return count;
+}
+
+// Lua drops trailing nils, so a table meant for N placeholders can arrive
+// shorter. Pad with NULL (oxmysql parity); a short array otherwise yields a
+// malformed prepared-statement packet. Extra values are left untouched.
+function padParams(sql, params) {
+    if (!Array.isArray(params) || typeof sql !== 'string' || !sql.includes('?')) return params;
+    const expected = countPlaceholders(sql);
+    if (params.length >= expected) return params;
+    const padded = params.slice();
+    while (padded.length < expected) padded.push(null);
+    return padded;
+}
+
 function hasNoBinds(params) {
     return Array.isArray(params) && params.length === 0;
 }
@@ -95,6 +138,7 @@ function textParams(params) {
 }
 
 async function runOnConnection(conn, sql, params, statements) {
+    params = padParams(sql, params);
     if (!hasNoBinds(params) && !needsTextProtocol(params) && (!statements || statements.isPreparable(sql))) {
         try {
             const result = await conn.execute(sql, params);
@@ -161,7 +205,7 @@ class Executor {
 
     async runRaw(sql, params, resource) {
         ({ sql, params } = normalizeNamedPlaceholders(sql, params));
-        params = normalizeParams(params);
+        params = padParams(sql, normalizeParams(params));
         const pool = this._poolFor(sql);
         const started = process.hrtime.bigint();
         let errored = false;
@@ -284,4 +328,4 @@ class Executor {
     }
 }
 
-module.exports = { Executor, normalizeParams, normalizeNamedPlaceholders, runOnConnection, hasNoBinds, needsTextProtocol, textParams, NULL_SENTINEL };
+module.exports = { Executor, normalizeParams, normalizeNamedPlaceholders, runOnConnection, countPlaceholders, padParams, hasNoBinds, needsTextProtocol, textParams, NULL_SENTINEL };
