@@ -46,10 +46,10 @@ function M.install()
     setmetatable(kora_sql, {
         __index = function(_, name)
             return function(_self, ...)
-                local args = { ... }
+                local args = table.pack(...)
                 table.insert(jsCalls, { name = name, args = args })
-                for _, a in ipairs(args) do
-                    if type(a) == 'function' then a({ ok = true, name = name }, nil) end
+                for i = 1, args.n do
+                    if type(args[i]) == 'function' then args[i]({ ok = true, name = name }, nil) end
                 end
                 return { ok = true, name = name }
             end

@@ -191,3 +191,28 @@ test('oxmysql async aliases are genuine JS promise exports', async () => {
         globalThis.on = previousOn;
     }
 });
+
+test('Lua wrapper argument shapes reach the impl with the caller resource', async () => {
+    const gate = deferred();
+    const { api, registered } = harness(gate);
+    const seen = {};
+    api.executor = {
+        query: async (sql, params, resource) => { seen.query = [sql, params, resource]; return []; },
+    };
+    api.txn = {
+        batch: async (queries, params) => { seen.batch = [queries, params]; return true; },
+        transaction: async (queries, params, resource) => { seen.transaction = [queries, params, resource]; return true; },
+    };
+    gate.resolve(true);
+    const call = (name, ...args) => new Promise((resolve) => registered[name](...args, (res, err) => resolve({ res, err })));
+
+    // Kora.sql.query(sql, nil) -> (sql, null, resource, cb)
+    assert.equal((await call('query', 'SELECT 1', null, 'kora_housing')).err, null);
+    assert.deepEqual(seen.query, ['SELECT 1', null, 'kora_housing']);
+    // Kora.sql.batch(statements) -> (statements, null, resource, cb)
+    await call('batch', [{ query: 'UPDATE a' }], null, 'kora_housing');
+    assert.deepEqual(seen.batch, [[{ query: 'UPDATE a' }], null]);
+    // Kora.sql.transaction(queries) -> (queries, null, resource, cb)
+    await call('transaction', ['UPDATE a'], null, 'kora_housing');
+    assert.deepEqual(seen.transaction, [['UPDATE a'], null, 'kora_housing']);
+});
