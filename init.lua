@@ -43,11 +43,14 @@ local NO_AWAIT_TIMEOUT = {
 }
 
 local function await(name, ...)
-    local args = { ... }
+    -- table.pack keeps the count when an argument is nil (e.g. query without
+    -- params, followed by the caller's resource name); #args would not.
+    local args = table.pack(...)
     local token = {}
     local p = promise.new()
     local settled = false
-    args[#args + 1] = function(result, err)
+    args.n = args.n + 1
+    args[args.n] = function(result, err)
         if settled then return end
         settled = true
         pendingWaits[token] = nil
@@ -57,7 +60,7 @@ local function await(name, ...)
             p:resolve(result)
         end
     end
-    local called, callErr = pcall(function() driver[name](driver, table.unpack(args)) end)
+    local called, callErr = pcall(function() driver[name](driver, table.unpack(args, 1, args.n)) end)
     if not called then return nil, tostring(callErr) end
     local limit = not NO_AWAIT_TIMEOUT[name] and awaitTimeoutMs() or nil
     if limit and not settled and type(GetGameTimer) == 'function' and Citizen and type(Citizen.CreateThread) == 'function' then
@@ -93,14 +96,20 @@ function Kora.sql.ready(timeoutMs)
     return true
 end
 
-function Kora.sql.query(sql, params)    return await('query', sql, params) end
-function Kora.sql.single(sql, params)   return await('single', sql, params) end
-function Kora.sql.scalar(sql, params)   return await('scalar', sql, params) end
-function Kora.sql.execute(sql, params)  return await('execute', sql, params) end
-function Kora.sql.insert(sql, params)   return await('insert', sql, params) end
-function Kora.sql.update(sql, params)   return await('update', sql, params) end
-function Kora.sql.batch(statements)     return await('batch', statements) end
-function Kora.sql.transaction(a, b)     return await('transaction', a, b) end
+-- Pass the calling resource so kora_sql can tell who is asking (e.g. it must
+-- let kora_housing read the stock housing tables directly instead of routing
+-- the read back through housing). kora_sql still prefers GetInvokingResource
+-- when it can see one. batch takes a nil placeholder so the name lands in the
+-- resource slot rather than params.
+local RESOURCE = GetCurrentResourceName()
+function Kora.sql.query(sql, params)    return await('query', sql, params, RESOURCE) end
+function Kora.sql.single(sql, params)   return await('single', sql, params, RESOURCE) end
+function Kora.sql.scalar(sql, params)   return await('scalar', sql, params, RESOURCE) end
+function Kora.sql.execute(sql, params)  return await('execute', sql, params, RESOURCE) end
+function Kora.sql.insert(sql, params)   return await('insert', sql, params, RESOURCE) end
+function Kora.sql.update(sql, params)   return await('update', sql, params, RESOURCE) end
+function Kora.sql.batch(statements)     return await('batch', statements, nil, RESOURCE) end
+function Kora.sql.transaction(a, b)     return await('transaction', a, b, RESOURCE) end
 function Kora.sql.transactionChecked(statements, operation)
     if operation then return await('transactionChecked', statements, operation) end
     return await('transactionChecked', statements)

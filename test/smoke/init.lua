@@ -83,4 +83,33 @@ harness.test('a stopped driver returns nil, err (and not ready) instead of raisi
     if not ok then error(raised, 0) end
 end)
 
+harness.test('data wrappers pass the calling resource after params, even when params is nil', function()
+    for _, name in ipairs({ 'query', 'single', 'scalar', 'execute', 'insert', 'update' }) do
+        local res = Kora.sql[name]('SELECT 1', nil)
+        harness.assertEqual(res.ok, true)
+        local call = net.lastCallExact(name)
+        harness.assertEqual(call.args.n, 4)
+        harness.assertEqual(call.args[1], 'SELECT 1')
+        harness.assertEqual(call.args[2], nil)
+        harness.assertEqual(call.args[3], 'consumer-under-test')
+        harness.assertEqual(type(call.args[4]), 'function')
+    end
+    Kora.sql.query('SELECT ?', { 1 })
+    local call = net.lastCallExact('query')
+    harness.assertEqual(call.args[2][1], 1)
+    harness.assertEqual(call.args[3], 'consumer-under-test')
+end)
+
+harness.test('batch and transaction put the resource in the resource slot', function()
+    Kora.sql.batch({ { query = 'UPDATE a' } })
+    local call = net.lastCallExact('batch')
+    harness.assertEqual(call.args.n, 4)
+    harness.assertEqual(call.args[2], nil)
+    harness.assertEqual(call.args[3], 'consumer-under-test')
+    Kora.sql.transaction({ 'UPDATE a' })
+    call = net.lastCallExact('transaction')
+    harness.assertEqual(call.args[2], nil)
+    harness.assertEqual(call.args[3], 'consumer-under-test')
+end)
+
 harness.report('init')
