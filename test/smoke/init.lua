@@ -10,6 +10,7 @@ Kora = {
     util = {
         fnv1a = function(value) return 'sum:' .. value end,
     },
+    logging = net.logging,
 }
 
 dofile(repoRoot .. 'init.lua')
@@ -81,6 +82,18 @@ harness.test('a stopped driver returns nil, err (and not ready) instead of raisi
     end)
     setmetatable(exports.kora_sql, real)
     if not ok then error(raised, 0) end
+end)
+
+harness.test('a failing fire-and-forget enqueue is logged as a warning with the error in fields', function()
+    local real = getmetatable(exports.kora_sql)
+    setmetatable(exports.kora_sql, { __index = function() return function() error('boom enqueue') end end })
+    local ok, raised = pcall(Kora.sql.enqueue, 'players', 'id', { id = 1 })
+    setmetatable(exports.kora_sql, real)
+    harness.assertTrue(ok, tostring(raised))
+    local call = net.findLog('warn', 'queue.fire_and_forget_failed')
+    harness.assertTrue(call ~= nil, 'logged warn queue.fire_and_forget_failed')
+    harness.assertEqual(call.fields.call, 'enqueue')
+    harness.assertTrue(tostring(call.fields.error):find('boom enqueue', 1, true) ~= nil, 'error carried in fields')
 end)
 
 harness.report('init')

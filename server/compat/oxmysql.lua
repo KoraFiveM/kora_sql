@@ -19,8 +19,7 @@ end
 local function warnSyncOnce(resource)
     if not Config.compat.warnOnSync or warnedSync[resource] then return end
     warnedSync[resource] = true
-    print(('^3[kora_sql:oxmysql-bridge]^7 \'%s\' is using the blocking Sync SQL API, which stalls the '
-        .. 'server thread. Migrate to Kora.sql.* or the callback form.'):format(resource))
+    Kora.logging.warn('oxmysql.sync_api_used', 'Resource is using the blocking Sync SQL API, which stalls the server thread; migrate to Kora.sql.* or the callback form', { callerResource = resource })
 end
 
 local oxName = {
@@ -50,7 +49,7 @@ local function syncCall(jsName)
         end, resource)
         local ok, res = pcall(Citizen.Await, p)
         if not ok then
-            print(('^1[kora_sql:oxmysql-bridge]^7 sync %s failed: %s'):format(jsName, tostring(res)))
+            Kora.logging.error('oxmysql.sync_failed', 'Sync SQL call failed', { call = jsName, error = tostring(res) })
             return nil
         end
         return res
@@ -83,9 +82,7 @@ local function guarded(fn)
     return function(query, params, cb)
         if not multipleStatementsAllowed() and looksMultiStatement(query) then
             local resource = GetInvokingResource() or GetCurrentResourceName()
-            print(('^1[kora_sql:oxmysql-bridge]^7 multi-statement query refused from \'%s\' -- split it, or set '
-                .. '`kora_sql_allow_multiple_statements true` and accept the injection amplification. SQL: %s')
-                :format(resource, tostring(query):sub(1, 120)))
+            Kora.logging.warn('oxmysql.multi_statement_refused', 'Multi-statement query refused; split it, or set kora_sql_allow_multiple_statements true and accept the injection amplification', { callerResource = resource })
             if cb == nil and isCallable(params) then cb = params end
             if isCallable(cb) then cb(nil, 'multi-statement refused') end
             return nil

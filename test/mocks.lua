@@ -57,8 +57,28 @@ function M.install()
     })
     _G.exports = { kora_sql = kora_sql }
 
+    -- Spy standing in for kora_lib's Kora.logging (the real one is a boot-time
+    -- dependency of the resource, not loaded by these plain-Lua tests).
+    local logCalls = {}
+    local logging = { isEnabled = function() return true end }
+    for _, level in ipairs({ 'trace', 'debug', 'info', 'warn', 'error', 'fatal' }) do
+        logging[level] = function(event, message, fields)
+            logCalls[#logCalls + 1] = { level = level, event = event, message = message, fields = fields }
+            return true
+        end
+    end
+    _G.Kora = _G.Kora or {}
+    _G.Kora.logging = logging
+
     return {
         providedExports = providedExports,
+        logging = logging,
+        logCalls = logCalls,
+        findLog = function(level, event)
+            for _, call in ipairs(logCalls) do
+                if call.level == level and call.event == event then return call end
+            end
+        end,
         jsCalls = jsCalls,
         getExport = function(resource, name)
             return providedExports[resource .. '_' .. name]

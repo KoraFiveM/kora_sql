@@ -131,7 +131,7 @@ function Kora.sql.stats()               return exports.kora_sql:stats() end
 
 local function fireAndForget(name, table_, key, rows, opts)
     local ok, err = pcall(function() exports.kora_sql[name](exports.kora_sql, table_, key, rows, opts) end)
-    if not ok then print(('^3[kora_sql] %s(%s) failed: %s^7'):format(name, tostring(table_), tostring(err))) end
+    if not ok then Kora.logging.warn('queue.fire_and_forget_failed', 'Fire-and-forget SQL call failed', { call = name, table = tostring(table_), error = tostring(err) }) end
 end
 function Kora.sql.enqueue(table_, key, row, opts)      fireAndForget('enqueue', table_, key, row, opts) end
 function Kora.sql.enqueueMany(table_, key, rows, opts) fireAndForget('enqueueMany', table_, key, rows, opts) end
