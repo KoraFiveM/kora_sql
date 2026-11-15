@@ -1,0 +1,3 @@
+# path:reason -- raw print/console diagnostics intentionally left in place (kora_lib PR #43 spec rule 5).
+server/commands.lua:/kora_sql operator console command; stats/slow/queue/bench tables and replies are console output by design
+server/js/:Node-host JS bundled into dist/build.js (committed bundle incl. mysql2); runs outside Lua so Kora.logging is unavailable, and dist cannot be rebuilt here -- needs a human decision (server_script server.js adapter + rebuild)

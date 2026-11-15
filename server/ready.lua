@@ -2,7 +2,7 @@ local isReady = false
 
 AddEventHandler('kora_sql:internal:ready', function(version)
     isReady = true
-    print(('^5[kora_sql:ready]^7 driver up: %s'):format(version and version.server or 'unknown'))
+    Kora.logging.info('driver.ready', 'SQL driver is up', { version = version and version.server or 'unknown' })
     TriggerEvent('kora_sql:ready', version)
 end)
 

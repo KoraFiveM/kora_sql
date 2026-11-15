@@ -79,6 +79,10 @@ h.test('multi-statement queries are refused (callback gets an error)', function(
     local errSeen = nil
     query('SELECT 1; DROP TABLE players', {}, function(_, err) errSeen = err end)
     h.assertTrue(errSeen ~= nil, 'multi-statement query should have been refused')
+    local logged = handle.findLog('warn', 'oxmysql.multi_statement_refused')
+    h.assertTrue(logged ~= nil, 'the refusal is logged as warn oxmysql.multi_statement_refused')
+    h.assertEqual(logged.fields.callerResource, 'r')
+    h.assertTrue(logged.fields.sql == nil, 'the raw query is never put in log fields')
 end)
 
 h.test('a trailing semicolon alone is NOT treated as multi-statement', function()
