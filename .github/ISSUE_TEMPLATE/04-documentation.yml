@@ -1,26 +1,37 @@
-name: Documentation Issue
-description: Report missing, outdated or unclear documentation for kora_sql.
+name: Documentation issue
+description: Report missing or unclear documentation for kora_sql.
 title: '[Docs]: '
 labels:
-- documentation
-- needs-triage
+  - documentation
+  - needs-triage
 body:
-- type: input
-  id: page
-  attributes:
-    label: Documentation page or file
-    placeholder: URL or path in kora_sql
-  validations:
-    required: true
-- type: textarea
-  id: issue
-  attributes:
-    label: What is wrong or missing?
-    description: Name the area that needs clarification, such as Query execution, Write coalescing, Driver compatibility,
-      Connection and transactions.
-  validations:
-    required: true
-- type: textarea
-  id: correction
-  attributes:
-    label: Suggested correction
+  - type: markdown
+    attributes:
+      value: >-
+        Search existing issues first and report one problem at a time. Remove passwords, tokens,
+        connection strings and player identifiers from text and attachments. For a suspected
+        vulnerability, use the repository Security tab or its security policy instead of a public
+        issue.
+  - type: input
+    id: page
+    attributes:
+      label: Which page or topic?
+      description: Paste the page URL/file path, or name the topic if the page is missing.
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What is missing or unclear?
+      description: Explain what you were trying to do with kora_sql and where the instructions fell short.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Documentation/resource version (optional)
+      description: Include the version selected on the docs site and your installed resource version if known.
+  - type: textarea
+    id: correction
+    attributes:
+      label: Suggested correction (optional)

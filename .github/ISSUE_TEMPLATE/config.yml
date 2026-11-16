@@ -1,5 +1,10 @@
 blank_issues_enabled: false
 contact_links:
+  - name: Find the right resource
+    url: https://docs.koraframe.work/resources
+    about: Find the resource documentation and repository.
   - name: Private security vulnerability report
-    url: https://docs.github.com/en/code-security/security-advisories/working-with-repository-security-advisories/privately-reporting-a-security-vulnerability
-    about: Do not post vulnerabilities publicly. Follow GitHub's private reporting guidance and the repository's security policy.
+    url: https://github.com/KoraFiveM/kora_sql/security/policy
+    about: >-
+      Use the repository security policy or private reporting option. Do not post exploit details
+      publicly.

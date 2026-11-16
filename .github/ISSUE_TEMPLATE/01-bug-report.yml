@@ -1,61 +1,79 @@
-name: Bug Report
-description: Report a reproducible problem in kora_sql.
+name: Bug report
+description: Report something that is not working in kora_sql.
 title: '[Bug]: '
 labels:
-- bug
-- needs-triage
+  - bug
+  - needs-triage
 body:
-- type: dropdown
-  id: resource
-  attributes:
-    label: Affected component
-    options:
-    - Query execution
-    - Write coalescing
-    - Driver compatibility
-    - Connection and transactions
-    - Other
-  validations:
-    required: true
-- type: input
-  id: version
-  attributes:
-    label: kora_sql version or commit
-    placeholder: Version or Git commit SHA
-  validations:
-    required: true
-- type: textarea
-  id: description
-  attributes:
-    label: What happened?
-    description: Describe what happened in kora_sql and which action triggered it.
-  validations:
-    required: true
-- type: textarea
-  id: steps
-  attributes:
-    label: Steps to reproduce
-    placeholder: List the setup, the action you took, and when the problem occurred.
-  validations:
-    required: true
-- type: textarea
-  id: expected
-  attributes:
-    label: Expected behavior
-  validations:
-    required: true
-- type: textarea
-  id: logs
-  attributes:
-    label: Logs, screenshots or clips
-    description: Remove tokens, passwords, IP addresses and other private data before posting.
-    render: shell
-- type: checkboxes
-  id: checks
-  attributes:
-    label: Checklist
-    options:
-    - label: I searched existing issues for duplicates.
+  - type: markdown
+    attributes:
+      value: >-
+        Search existing issues first and report one problem at a time. Remove passwords, tokens,
+        connection strings and player identifiers from text and attachments. For a suspected
+        vulnerability, use the repository Security tab or its security policy instead of a public
+        issue.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened, and what should have happened?
+      description: Describe one problem in kora_sql and the result you expected.
+    validations:
       required: true
-    - label: I removed sensitive information from my report.
+  - type: textarea
+    id: steps
+    attributes:
+      label: How can we reproduce it?
+      description: List what you did in order. If it happens only sometimes, say how often.
+      placeholder: |-
+        1. Start with…
+        2. Do…
+        3. Observe…
+    validations:
       required: true
+  - type: input
+    id: version
+    attributes:
+      label: kora_sql version or commit
+      description: >-
+        Use the installed release, fxmanifest.lua version, or Git commit. If unavailable, write
+        "Unknown" and say when you downloaded it.
+      placeholder: Release/tag or commit SHA
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which part is affected?
+      options:
+        - Query execution
+        - Write coalescing
+        - Driver compatibility
+        - Connection and transactions
+        - Other / not sure
+  - type: textarea
+    id: context
+    attributes:
+      label: Resource details (optional)
+      description: >-
+        Name the native or compatibility API and calling resource. Include database engine/version,
+        error code and a query with example parameters; remove connection strings.
+  - type: textarea
+    id: environment
+    attributes:
+      label: Setup (optional)
+      description: >-
+        Include FXServer artifact/game build, relevant dependency versions and custom changes if
+        known. Do not paste your full server.cfg.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant error or log (optional)
+      description: Copy the nearby F8/client or server console error. Remove secrets and player data.
+      render: text
+  - type: textarea
+    id: media
+    attributes:
+      label: Screenshots or video (optional)
+      description: >-
+        Drag in an image or add a clip link if it helps show the problem. Check attachments for
+        private information.

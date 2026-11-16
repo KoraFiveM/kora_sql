@@ -1,38 +1,71 @@
-name: Performance Issue
-description: Report a slowdown or high resource usage in kora_sql.
+name: Performance issue
+description: Report lag or high resource usage in kora_sql.
 title: '[Performance]: '
 labels:
-- performance
-- needs-triage
+  - performance
+  - needs-triage
 body:
-- type: input
-  id: resource
-  attributes:
-    label: Affected component
-    placeholder: For example, Query execution, Write coalescing, Driver compatibility, Connection and transactions
-  validations:
-    required: true
-- type: input
-  id: version
-  attributes:
-    label: kora_sql version or commit
-  validations:
-    required: true
-- type: textarea
-  id: impact
-  attributes:
-    label: Performance impact
-    description: Include query or transaction timings, typical and affected row counts, and sanitized profiling data.
-  validations:
-    required: true
-- type: textarea
-  id: reproduce
-  attributes:
-    label: Steps to reproduce
-  validations:
-    required: true
-- type: textarea
-  id: environment
-  attributes:
-    label: Environment and profiling evidence
-    description: Include the database engine and version, server artifacts, and sanitized logs or query plans.
+  - type: markdown
+    attributes:
+      value: >-
+        Search existing issues first and report one problem at a time. Remove passwords, tokens,
+        connection strings and player identifiers from text and attachments. For a suspected
+        vulnerability, use the repository Security tab or its security policy instead of a public
+        issue.
+  - type: textarea
+    id: impact
+    attributes:
+      label: What slows down, and when?
+      description: >-
+        Describe the affected action and how often it occurs. Include idle/active resmon, FPS or
+        timings if available; profiling is optional.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: How can we reproduce it?
+      description: List the steps and approximate player/entity count or workload when it happens.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: kora_sql version or commit
+      description: >-
+        Use the installed release, fxmanifest.lua version, or Git commit. If unavailable, write
+        "Unknown" and say when you downloaded it.
+      placeholder: Release/tag or commit SHA
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which part is affected?
+      options:
+        - Query execution
+        - Write coalescing
+        - Driver compatibility
+        - Connection and transactions
+        - Other / not sure
+  - type: textarea
+    id: context
+    attributes:
+      label: Resource details (optional)
+      description: >-
+        Name the native or compatibility API and calling resource. Include database engine/version,
+        error code and a query with example parameters; remove connection strings.
+  - type: textarea
+    id: environment
+    attributes:
+      label: Setup (optional)
+      description: >-
+        Include FXServer artifact/game build, relevant dependency versions and custom changes if
+        known. Do not paste your full server.cfg.
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Measurements or profiler capture (optional)
+      description: >-
+        Add idle/active measurements, profiler output or screenshots. Include units and remove
+        private information.
