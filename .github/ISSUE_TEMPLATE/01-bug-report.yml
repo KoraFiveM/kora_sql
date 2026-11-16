@@ -12,32 +12,20 @@ body:
         connection strings and player identifiers from text and attachments. For a suspected
         vulnerability, use the repository Security tab or its security policy instead of a public
         issue.
-  - type: textarea
-    id: problem
-    attributes:
-      label: What happened, and what should have happened?
-      description: Describe one problem in kora_sql and the result you expected.
-    validations:
-      required: true
-  - type: textarea
-    id: steps
-    attributes:
-      label: How can we reproduce it?
-      description: List what you did in order. If it happens only sometimes, say how often.
-      placeholder: |-
-        1. Start with…
-        2. Do…
-        3. Observe…
-    validations:
-      required: true
-  - type: input
+  - type: dropdown
     id: version
     attributes:
-      label: kora_sql version or commit
+      label: Resource version
       description: >-
-        Use the installed release, fxmanifest.lua version, or Git commit. If unavailable, write
-        "Unknown" and say when you downloaded it.
-      placeholder: Release/tag or commit SHA
+        Select your installed kora_sql version (check fxmanifest.lua if unsure). For a development
+        build or another version, add the version/commit under Technical details.
+      options:
+        - v0.2.1
+        - v0.2.0
+        - v0.1.0
+        - Development / unreleased
+        - Other version
+        - Unknown
     validations:
       required: true
   - type: dropdown
@@ -51,25 +39,53 @@ body:
         - Connection and transactions
         - Other / not sure
   - type: textarea
-    id: context
+    id: problem
     attributes:
-      label: Resource details (optional)
+      label: Describe the issue in detail.
       description: >-
-        Name the native or compatibility API and calling resource. Include database engine/version,
-        error code and a query with example parameters; remove connection strings.
-  - type: textarea
-    id: environment
-    attributes:
-      label: Setup (optional)
-      description: >-
-        Include FXServer artifact/game build, relevant dependency versions and custom changes if
-        known. Do not paste your full server.cfg.
+        Describe what happens in kora_sql. Name the native or compatibility API and calling
+        resource. Include database engine/version, error code and a query with example parameters;
+        remove connection strings.
+    validations:
+      required: true
   - type: textarea
     id: logs
     attributes:
-      label: Relevant error or log (optional)
-      description: Copy the nearby F8/client or server console error. Remove secrets and player data.
+      label: Relevant F8 error or log (optional)
+      description: >-
+        Provide F8/client or server console errors and say which console they came from. Remove
+        secrets and player data.
       render: text
+  - type: textarea
+    id: steps
+    attributes:
+      label: What are the steps to reproduce the issue?
+      description: >-
+        List what you did in order, including any required job, items or location. If it happens
+        only sometimes, say how often and whether it follows a reconnect or resource restart.
+      placeholder: |-
+        1. Start kora_sql and the resource that makes the failing database call.
+        2. Trigger the action in the calling resource that runs the affected query or database operation.
+        3. Describe what happens and when the issue starts.
+    validations:
+      required: true
+  - type: textarea
+    id: expected_behavior
+    attributes:
+      label: What is the expected behavior?
+      description: >-
+        Explain what kora_sql should do when you follow those steps, including any expected changes
+        to the player, UI or server state.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Technical details (optional)
+      description: >-
+        Include your exact version/commit if you selected a development build or another version,
+        FXServer artifact/game build, relevant dependency versions and custom changes if known. Do
+        not paste your full server.cfg.
   - type: textarea
     id: media
     attributes:
