@@ -26,7 +26,7 @@ body:
       description: Explain what you were trying to do with kora_sql and where the instructions fell short.
     validations:
       required: true
-  - type: input
+  - type: textarea
     id: version
     attributes:
       label: Documentation/resource version (optional)

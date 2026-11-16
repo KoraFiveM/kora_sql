@@ -28,7 +28,7 @@ body:
       description: List the steps and approximate player/entity count or workload when it happens.
     validations:
       required: true
-  - type: input
+  - type: textarea
     id: version
     attributes:
       label: kora_sql version or commit
