@@ -6,6 +6,7 @@
     "server": [
       "config.lua",
       "init.lua",
+      "kora_versioncheck.lua",
       "lib/MySQL.lua",
       "server/commands.lua",
       "server/compat/ghmattimysql.lua",
