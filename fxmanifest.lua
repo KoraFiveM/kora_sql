@@ -52,3 +52,5 @@ server_scripts {
 
 -- Like oxmysql's release artifact, the committed bundle contains mysql2.
 -- FXServer needs neither a yarn builder nor runtime node_modules.
+
+server_script 'kora_versioncheck.lua'

@@ -1,0 +1,2 @@
+- 0.2.2
+  - added version check
