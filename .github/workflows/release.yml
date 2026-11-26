@@ -1,0 +1,57 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag (for example, v0.2.3)
+        required: true
+        type: string
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  create:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: kora-vps
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create GitHub release with ZIP
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          git check-ref-format "refs/tags/$RELEASE_TAG"
+          if git ls-remote --exit-code --refs origin "refs/tags/$RELEASE_TAG" >/dev/null; then
+            echo "The tag already exists. Publish it from GitHub Releases to attach the ZIP." >&2
+            exit 1
+          else
+            status=$?
+            if [ "$status" -ne 2 ]; then exit "$status"; fi
+          fi
+          asset="dist/kora_sql-${RELEASE_TAG//\//-}.zip"
+          python3 .github/scripts/package-resource.py 'kora_sql' "$asset"
+          gh release create --target "$GITHUB_SHA" --generate-notes -- "$RELEASE_TAG" "$asset"
+
+  publish:
+    if: github.event_name == 'release'
+    runs-on: kora-vps
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Attach installable ZIP
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          asset="dist/kora_sql-${RELEASE_TAG//\//-}.zip"
+          python3 .github/scripts/package-resource.py 'kora_sql' "$asset"
+          gh release upload -- "$RELEASE_TAG" "$asset"
